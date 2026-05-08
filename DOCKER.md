@@ -16,6 +16,7 @@ This guide covers deploying the Homebox MCP Server using Docker, with specific i
 ### Method 1: Using Docker Compose (Recommended)
 
 1. **Edit docker-compose.yml** and update your credentials:
+
    ```yaml
    environment:
      - HOMEBOX_URL=http://homebox:7745
@@ -24,6 +25,7 @@ This guide covers deploying the Homebox MCP Server using Docker, with specific i
    ```
 
 2. **Start the container:**
+
    ```bash
    docker-compose up -d
    ```
@@ -36,6 +38,7 @@ This guide covers deploying the Homebox MCP Server using Docker, with specific i
 ### Method 2: Using Docker CLI
 
 1. **Build the image:**
+
    ```bash
    docker build -t homebox-mcp-server .
    ```
@@ -86,6 +89,7 @@ You'll set these in Container Station when creating the container (Step 3).
 **Option B: Using a Config File**
 
 1. Create `config.json` in `/share/Container/homebox-mcp`:
+
    ```json
    {
      "homeboxUrl": "http://homebox:7745",
@@ -112,8 +116,9 @@ You'll set these in Container Station when creating the container (Step 3).
 4. **Paste this configuration:**
 
    **If using environment variables:**
+
    ```yaml
-   version: '3.8'
+   version: "3.8"
 
    services:
      homebox-mcp:
@@ -129,8 +134,9 @@ You'll set these in Container Station when creating the container (Step 3).
    ```
 
    **If using config file:**
+
    ```yaml
-   version: '3.8'
+   version: "3.8"
 
    services:
      homebox-mcp:
@@ -157,19 +163,23 @@ You'll set these in Container Station when creating the container (Step 3).
 1. **SSH into your QNAP**
 
 2. **Navigate to the folder:**
+
    ```bash
    cd /share/Container/homebox-mcp
    ```
 
 3. **Build the image:**
+
    ```bash
    docker build -t homebox-mcp-server .
    ```
 
 4. **Find your Homebox network:**
+
    ```bash
    docker inspect homebox | grep NetworkMode
    ```
+
    This will show something like `qnet-static-eth0-xxxxxx`
 
 5. **Run the container:**
@@ -187,11 +197,13 @@ You'll set these in Container Station when creating the container (Step 3).
 ### Step 4: Verify Deployment
 
 1. **Check container logs** in Container Station or via CLI:
+
    ```bash
    docker logs homebox-mcp-server
    ```
 
 2. **You should see:**
+
    ```
    Starting Homebox MCP Server...
    Loaded configuration from environment variables
@@ -230,12 +242,14 @@ Include config.json when building the image (not recommended for security).
 ### Finding Your Homebox Container Network
 
 **Option 1: Container Station UI**
+
 1. Open Container Station
 2. Click on your Homebox container
 3. Go to "Network" section
 4. Note the network name (e.g., `qnet-static-eth0-xxxxx`)
 
 **Option 2: Docker CLI**
+
 ```bash
 docker inspect homebox --format='{{.HostConfig.NetworkMode}}'
 ```
@@ -246,7 +260,7 @@ The MCP server must be on the **same Docker network** as Homebox:
 
 ```yaml
 networks:
-  - qnet-static-eth0-xxxxx  # Same as Homebox
+  - qnet-static-eth0-xxxxx # Same as Homebox
 ```
 
 ### Important Notes
@@ -275,6 +289,7 @@ Since the MCP server runs in a container, you'll use `docker exec` to interact w
 2. **Add this configuration:**
 
    **For local Docker/QNAP on same network:**
+
    ```json
    {
      "mcpServers": {
@@ -293,6 +308,7 @@ Since the MCP server runs in a container, you'll use `docker exec` to interact w
    ```
 
    **For remote QNAP (using SSH):**
+
    ```json
    {
      "mcpServers": {
@@ -319,6 +335,7 @@ Since the MCP server runs in a container, you'll use `docker exec` to interact w
 If you prefer, you can set up an SSH tunnel to access the container:
 
 1. **On your local machine:**
+
    ```bash
    ssh -L 9000:localhost:9000 user@your-qnap-ip
    ```
@@ -336,11 +353,13 @@ If it works, you should see your Homebox locations!
 ### Container won't start
 
 **Check logs:**
+
 ```bash
 docker logs homebox-mcp-server
 ```
 
 **Common issues:**
+
 - Missing environment variables
 - Invalid JSON in config.json
 - Permission issues with config file
@@ -348,11 +367,13 @@ docker logs homebox-mcp-server
 ### "Authentication failed"
 
 **Possible causes:**
+
 1. Wrong email or password in environment variables
 2. Homebox container not running
 3. Network issue between containers
 
 **Solutions:**
+
 - Verify credentials: `docker logs homebox-mcp-server`
 - Check Homebox is running: `docker ps | grep homebox`
 - Verify both containers on same network
@@ -360,22 +381,28 @@ docker logs homebox-mcp-server
 ### "Cannot connect to Homebox" or "ECONNREFUSED"
 
 **Possible causes:**
+
 1. Containers on different networks
 2. Wrong Homebox URL
 3. Homebox not running
 
 **Solutions:**
+
 1. **Check networks match:**
+
    ```bash
    docker inspect homebox-mcp-server --format='{{.HostConfig.NetworkMode}}'
    docker inspect homebox --format='{{.HostConfig.NetworkMode}}'
    ```
+
    These should be identical.
 
 2. **Check Homebox container name:**
+
    ```bash
    docker ps --format '{{.Names}}' | grep homebox
    ```
+
    Use this exact name in HOMEBOX_URL
 
 3. **Verify Homebox is accessible:**
@@ -386,12 +413,15 @@ docker logs homebox-mcp-server
 ### Claude Desktop can't connect
 
 **For `docker exec` method:**
+
 1. Verify Docker is accessible from your terminal:
+
    ```bash
    docker ps
    ```
 
 2. Verify container is running:
+
    ```bash
    docker ps | grep homebox-mcp-server
    ```
@@ -403,7 +433,9 @@ docker logs homebox-mcp-server
    (Press Ctrl+C to exit)
 
 **For SSH method:**
+
 1. Test SSH connection:
+
    ```bash
    ssh user@your-qnap-ip docker ps
    ```
@@ -413,11 +445,13 @@ docker logs homebox-mcp-server
 ### Container keeps restarting
 
 **Check logs for error messages:**
+
 ```bash
 docker logs homebox-mcp-server --tail 100
 ```
 
 **Common causes:**
+
 - Configuration error causing immediate exit
 - Authentication failure
 - Missing dependencies (shouldn't happen with proper Docker build)
@@ -427,9 +461,11 @@ docker logs homebox-mcp-server --tail 100
 The container couldn't find configuration. Verify:
 
 1. **Environment variables are set:**
+
    ```bash
    docker inspect homebox-mcp-server --format='{{.Config.Env}}'
    ```
+
    Should show HOMEBOX_URL, HOMEBOX_EMAIL, HOMEBOX_PASSWORD
 
 2. **OR config file is mounted:**
@@ -443,18 +479,21 @@ The container couldn't find configuration. Verify:
 To update the MCP server with new code:
 
 1. **Stop and remove old container:**
+
    ```bash
    docker stop homebox-mcp-server
    docker rm homebox-mcp-server
    ```
 
 2. **Pull latest code:**
+
    ```bash
    cd /share/Container/homebox-mcp
    git pull
    ```
 
 3. **Rebuild image:**
+
    ```bash
    docker build -t homebox-mcp-server .
    ```
@@ -462,6 +501,7 @@ To update the MCP server with new code:
 4. **Start new container** (use same docker run command as before)
 
 Or with docker-compose:
+
 ```bash
 docker-compose down
 git pull
