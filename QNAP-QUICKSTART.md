@@ -22,12 +22,14 @@ You have Homebox running in a Docker container on your QNAP. This guide will hel
 You need to know what Docker network your Homebox container uses:
 
 **Method A: Container Station UI**
+
 1. Open Container Station on your QNAP
 2. Click on your Homebox container
 3. Look at the "Network" section
 4. Note the network name (looks like: `qnet-static-eth0-xxxxxx`)
 
 **Method B: SSH Command**
+
 ```bash
 ssh admin@your-qnap-ip
 docker inspect homebox --format='{{.HostConfig.NetworkMode}}'
@@ -42,7 +44,7 @@ You'll create a simple Docker Compose configuration that pulls the pre-built ima
 1. **Copy the template below:**
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   homebox-mcp:
@@ -87,6 +89,7 @@ Container Station will pull the pre-built image from GitHub and start the contai
 **Check the logs:**
 
 In Container Station:
+
 1. Click on the `homebox-mcp-server` container
 2. Click "Logs"
 3. You should see:
@@ -98,11 +101,13 @@ In Container Station:
    ```
 
 Or via SSH:
+
 ```bash
 docker logs homebox-mcp-server
 ```
 
 **If you see errors:**
+
 - "Authentication failed" - Check your email/password
 - "Cannot connect" - Check the network configuration
 - See [DOCKER.md](DOCKER.md) for detailed troubleshooting
@@ -114,10 +119,12 @@ Now you need to tell Claude Desktop how to access the MCP server running on your
 **Option A: If Claude Desktop is on the same network as QNAP**
 
 Edit your Claude Desktop config file:
+
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 Add this:
+
 ```json
 {
   "mcpServers": {
@@ -169,15 +176,19 @@ Claude Desktop requires SSH key authentication (not password).
 **On your computer:**
 
 1. Generate SSH key if you don't have one:
+
    ```bash
    ssh-keygen -t rsa -b 4096
    ```
+
    Press Enter to accept defaults
 
 2. Copy key to QNAP:
+
    ```bash
    ssh-copy-id admin@your-qnap-ip
    ```
+
    Enter your QNAP password when prompted
 
 3. Test SSH connection:
@@ -201,6 +212,7 @@ If it works, Claude will show your locations! 🎉
 **Problem:** Wrong email or password
 
 **Solution:**
+
 1. Stop the container in Container Station
 2. Edit `docker-compose.qnap.yml` with correct credentials
 3. Rebuild: `docker-compose -f docker-compose.qnap.yml up -d --build`
@@ -210,6 +222,7 @@ If it works, Claude will show your locations! 🎉
 **Problem:** Containers can't talk to each other
 
 **Solution:**
+
 1. Verify both containers are on the same network
 2. Check your Homebox container name:
    ```bash
@@ -222,6 +235,7 @@ If it works, Claude will show your locations! 🎉
 **Problem:** SSH or Docker connection issue
 
 **Solution:**
+
 1. Test SSH manually: `ssh admin@your-qnap-ip docker ps`
 2. Verify SSH keys are set up (no password prompt)
 3. Check container is running: `docker ps | grep homebox-mcp`
@@ -231,6 +245,7 @@ If it works, Claude will show your locations! 🎉
 **Problem:** Configuration error
 
 **Solution:**
+
 1. Check logs: `docker logs homebox-mcp-server`
 2. Common causes:
    - Invalid JSON in config
@@ -242,12 +257,14 @@ If it works, Claude will show your locations! 🎉
 When a new version is released, it's very easy to update since you're using the pre-built image:
 
 **In Container Station UI:**
+
 1. Stop the `homebox-mcp-server` container
 2. Click on the container → Click "Image"
 3. Click "Pull" to get the latest version
 4. Start the container again
 
 **Or via SSH:**
+
 ```bash
 ssh admin@your-qnap-ip
 docker pull ghcr.io/jeeves5454/homebox-mcp:latest
