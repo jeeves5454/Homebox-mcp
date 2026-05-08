@@ -1,0 +1,27 @@
+# Test stack for `npm run test:e2e`. Managed automatically by src/test-e2e.ts —
+# do not bring up manually. Homebox is pinned to the last version that uses the
+# /api/v1/labels endpoint; upgrade in lockstep with any labels→tags migration.
+services:
+  homebox:
+    image: ghcr.io/sysadminsmedia/homebox:0.22.3
+    environment:
+      - HBOX_LOG_LEVEL=warn
+      - HBOX_OPTIONS_ALLOW_REGISTRATION=true
+    ports:
+      - "7745:7745"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7745/api/v1/status"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  homebox-mcp:
+    build: .
+    environment:
+      - HOMEBOX_URL=http://homebox:7745
+      - HOMEBOX_EMAIL=test@homebox-mcp.test
+      - HOMEBOX_PASSWORD=TestPassword123!
+    depends_on:
+      homebox:
+        condition: service_healthy

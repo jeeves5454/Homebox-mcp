@@ -53,8 +53,10 @@ class HomeboxClient {
       });
 
       if (response.data && response.data.token) {
-        this.authToken = response.data.token;
-        this.axios.defaults.headers.common["Authorization"] = `Bearer ${this.authToken}`;
+        const token: string = response.data.token;
+        this.authToken = token;
+        const authHeader = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+        this.axios.defaults.headers.common["Authorization"] = authHeader;
       } else {
         throw new Error("Authentication failed: No token received");
       }
