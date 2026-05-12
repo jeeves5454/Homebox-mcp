@@ -11,6 +11,13 @@ services:
       - HOMEBOX_URL=http://homebox:7745
       - HOMEBOX_EMAIL=your-email@example.com
       - HOMEBOX_PASSWORD=your-password
+      - PORT=8811
+      # Optional: enables get_item_attachment by setting the public base URL for attachment downloads.
+      # Use a path or subdomain distinct from the MCP endpoint so your reverse proxy can route
+      # attachment traffic independently (e.g. /homebox-mcp-attachments → container /items/…).
+      #   Direct:         ATTACHMENT_BASE_URL=http://192.168.1.10:8811
+      #   Reverse proxy:  ATTACHMENT_BASE_URL=https://myhost.example.com/homebox-mcp-attachments
+      # - ATTACHMENT_BASE_URL=https://your-host-or-tunnel-url/homebox-mcp-attachments
 
     # Option 2: Use a config file (uncomment if preferred)
     # volumes:
@@ -21,10 +28,9 @@ services:
     networks:
       - homebox-network
 
-    # Port mapping is not needed for MCP server (uses stdio)
-    # but you can expose for debugging if needed
-    # ports:
-    #   - "3000:3000"
+    # Expose the HTTP/SSE port for claude.ai and other HTTP-based MCP clients
+    ports:
+      - "8811:8811"
 
 # If Homebox is in a separate docker-compose, you can reference its network
 networks:
