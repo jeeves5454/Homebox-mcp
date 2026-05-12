@@ -7,6 +7,7 @@ This guide provides specific examples for using Homebox + Open WebUI to manage y
 ### Recommended Homebox Structure
 
 #### Locations
+
 ```
 Bar Cart
 ├── Top Shelf (Premium spirits)
@@ -22,8 +23,10 @@ Pantry
 └── Bar Supplies
 ```
 
-#### Labels/Tags
-Create these labels in Homebox:
+#### Tags
+
+Create these tags in Homebox:
+
 - `Spirits` - All alcoholic spirits
 - `Liquor` - General alcohol category
 - `Mixers` - Non-alcoholic mixers
@@ -33,6 +36,7 @@ Create these labels in Homebox:
 - `Syrups` - Simple syrup, grenadine, etc.
 
 Add sub-categories for spirits:
+
 - `Vodka`
 - `Gin`
 - `Rum`
@@ -44,29 +48,32 @@ Add sub-categories for spirits:
 ### Example Items
 
 #### Spirit Example
+
 ```
 Name: Grey Goose Vodka
 Description: Premium French vodka, 750ml, 40% ABV. Opened: 2024-11-01
 Location: Bar Cart > Top Shelf
-Labels: Spirits, Vodka, Liquor
+Tags: Spirits, Vodka, Liquor
 Quantity: 1
 ```
 
 #### Mixer Example
+
 ```
 Name: Tonic Water
 Description: Fever-Tree Premium Indian Tonic Water, 4-pack
 Location: Bar Cart > Bottom Shelf
-Labels: Mixers
+Tags: Mixers
 Quantity: 3
 ```
 
 #### Bar Tool Example
+
 ```
 Name: Cocktail Shaker
 Description: Stainless steel Boston shaker, 28oz
 Location: Bar Cart > Tools Drawer
-Labels: Bar Tools
+Tags: Bar Tools
 Quantity: 1
 ```
 
@@ -75,6 +82,7 @@ Quantity: 1
 ### Basic Inventory Queries
 
 **Query 1: See what you have**
+
 ```
 User: What alcohol do I have in my inventory?
 
@@ -91,6 +99,7 @@ You have the following spirits:
 ```
 
 **Query 2: Check specific location**
+
 ```
 User: What's on my bar cart?
 
@@ -114,10 +123,11 @@ Tools Drawer:
 ```
 
 **Query 3: Check by category**
+
 ```
 User: Show me all my vodka
 
-LLM: [Calls get_items_by_label("Vodka")]
+LLM: [Calls get_items_by_tag("Vodka")]
 You have these vodkas in your collection:
 
 • Grey Goose Vodka
@@ -134,6 +144,7 @@ You have these vodkas in your collection:
 ### Cocktail Recipe Queries
 
 **Query 4: Make a specific cocktail**
+
 ```
 User: I want to make a Moscow Mule. Do I have everything?
 
@@ -155,6 +166,7 @@ Serve in a copper mug over ice. Enjoy!
 ```
 
 **Query 5: Recipe suggestions**
+
 ```
 User: What cocktails can I make with what I have?
 
@@ -189,6 +201,7 @@ Would you like the recipe for any of these?
 ```
 
 **Query 6: Suggest with substitutions**
+
 ```
 User: I want to make a Margarita but I'm not sure if I have everything
 
@@ -210,6 +223,7 @@ Would you like me to help you add Triple Sec to your Homebox shopping list?
 ### Shopping and Planning
 
 **Query 7: What's running low**
+
 ```
 User: What bar supplies am I running low on?
 
@@ -229,6 +243,7 @@ Recommendations:
 ```
 
 **Query 8: Party planning**
+
 ```
 User: I'm having 8 people over for cocktails. What should I make based on what I have?
 
@@ -256,6 +271,7 @@ Would you like me to create a shopping list for what you'll need to restock afte
 ### Learning and Discovery
 
 **Query 9: What can I make with specific spirit**
+
 ```
 User: I have Maker's Mark bourbon. What cocktails use bourbon?
 
@@ -274,6 +290,7 @@ Would you like the recipe for any of these?
 ```
 
 **Query 10: Suggest new purchases**
+
 ```
 User: What should I buy next to expand my cocktail options?
 
@@ -305,6 +322,7 @@ These 4 bottles would add 15+ new cocktail options to your repertoire!
 ## Advanced Queries
 
 ### Seasonal Recommendations
+
 ```
 User: It's summer. What refreshing cocktails can I make?
 
@@ -320,6 +338,7 @@ All use ingredients you currently have in stock!
 ```
 
 ### Flavor Profile Matching
+
 ```
 User: I like sweet cocktails. What can you recommend?
 
@@ -340,6 +359,7 @@ These would unlock many dessert cocktails!
 ```
 
 ### Batch Cocktails
+
 ```
 User: I need a batch cocktail recipe for my party. What can I pre-make?
 
@@ -363,24 +383,28 @@ Alternative: Batch Gin & Tonics
 ## Tips for Best Results
 
 ### 1. Be Specific in Homebox
+
 ```
 ❌ "Bourbon"
 ✅ "Maker's Mark Kentucky Straight Bourbon Whiskey"
 ```
 
 ### 2. Include ABV and Size
+
 ```
 Description: "750ml, 40% ABV, opened 2024-11"
 ```
 
 ### 3. Track Open vs Sealed
+
 ```
-Labels: ["Spirits", "Vodka", "Open"]
+Tags: ["Spirits", "Vodka", "Open"]
 or
-Labels: ["Spirits", "Vodka", "Sealed"]
+Tags: ["Spirits", "Vodka", "Sealed"]
 ```
 
 ### 4. Use Custom Fields for:
+
 - Purchase date
 - Expiration (for mixers)
 - Price paid
@@ -388,6 +412,7 @@ Labels: ["Spirits", "Vodka", "Sealed"]
 - Rating (1-5 stars)
 
 ### 5. Maintain Sub-locations
+
 ```
 Bar Cart > Top Shelf
 Bar Cart > Bottom Shelf
@@ -398,22 +423,23 @@ Bar Cart > Tools Drawer
 
 Here's what to keep in stock for popular cocktails:
 
-| Cocktail | Base Spirit | Other Ingredients |
-|----------|-------------|------------------|
-| Martini | Gin | Dry vermouth, olives |
-| Margarita | Tequila | Triple sec, lime |
-| Old Fashioned | Bourbon | Bitters, simple syrup, orange |
-| Mojito | Rum | Mint, lime, soda, simple syrup |
-| Manhattan | Whiskey | Sweet vermouth, bitters |
-| Daiquiri | Rum | Lime, simple syrup |
-| Negroni | Gin | Campari, sweet vermouth |
-| Whiskey Sour | Bourbon | Lemon, simple syrup |
-| Moscow Mule | Vodka | Ginger beer, lime |
-| Gin & Tonic | Gin | Tonic water, lime |
+| Cocktail      | Base Spirit | Other Ingredients              |
+| ------------- | ----------- | ------------------------------ |
+| Martini       | Gin         | Dry vermouth, olives           |
+| Margarita     | Tequila     | Triple sec, lime               |
+| Old Fashioned | Bourbon     | Bitters, simple syrup, orange  |
+| Mojito        | Rum         | Mint, lime, soda, simple syrup |
+| Manhattan     | Whiskey     | Sweet vermouth, bitters        |
+| Daiquiri      | Rum         | Lime, simple syrup             |
+| Negroni       | Gin         | Campari, sweet vermouth        |
+| Whiskey Sour  | Bourbon     | Lemon, simple syrup            |
+| Moscow Mule   | Vodka       | Ginger beer, lime              |
+| Gin & Tonic   | Gin         | Tonic water, lime              |
 
 ## Integration with Recipe Sites
 
 You could even ask:
+
 ```
 User: Find me a cocktail recipe from Liquor.com that uses what I have
 

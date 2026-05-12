@@ -3,6 +3,7 @@
 This guide shows you how to integrate your Homebox home inventory with Open WebUI, enabling any function-calling capable LLM (like Llama 3.1, Mistral, Qwen) to query your inventory data.
 
 Perfect for use cases like:
+
 - 🍸 "What cocktails can I make with my liquor?"
 - 🔧 "Do I have any power tools in the garage?"
 - 📦 "What's in my storage unit?"
@@ -149,6 +150,7 @@ After saving, you'll see the function's configuration page:
    - Make sure "Homebox Item Search" is **enabled**
 
 4. **Ask a test question**:
+
    ```
    What locations do I have in my Homebox inventory?
    ```
@@ -160,6 +162,7 @@ After saving, you'll see the function's configuration page:
 Once set up, you can ask questions like:
 
 ### Inventory Queries
+
 ```
 What alcohol do I have in my bar?
 ```
@@ -173,6 +176,7 @@ Show me everything in the "Bar" location
 ```
 
 ### Recipe Suggestions
+
 ```
 What cocktails can I make with the liquor I have available?
 ```
@@ -186,6 +190,7 @@ Suggest a cocktail recipe using only what's in my bar right now
 ```
 
 ### Specific Searches
+
 ```
 Do I have any vodka? What brand?
 ```
@@ -202,26 +207,29 @@ What types of rum are in my inventory?
 
 The Homebox function provides these tools to the LLM:
 
-| Function | Purpose | Example Use |
-|----------|---------|-------------|
-| `search_homebox_items()` | Search items by keyword | "Find vodka" |
-| `list_homebox_locations()` | Show all locations | "What locations exist?" |
-| `get_items_by_location()` | Items in specific place | "What's in the bar?" |
-| `list_homebox_labels()` | Show all labels/tags | "What categories do I have?" |
-| `get_items_by_label()` | Items with specific tag | "Show me all alcohol" |
+| Function                   | Purpose                                           | Example Use                  |
+| -------------------------- | ------------------------------------------------- | ---------------------------- |
+| `search_homebox_items()`   | Search items by keyword                           | "Find vodka"                 |
+| `list_homebox_locations()` | Show all locations                                | "What locations exist?"      |
+| `get_items_by_location()`  | Items in specific place                           | "What's in the bar?"         |
+| `list_homebox_labels()`    | Show all tags                                     | "What categories do I have?" |
+| `get_items_by_label()`     | Items with specific tag (legacy name — see above) | "Show me all alcohol"        |
 
 ## Setting Up Your Homebox for Best Results
 
 To get the most out of this integration:
 
 ### 1. Use Clear Naming
+
 ```
 ✅ "Grey Goose Vodka"
 ❌ "Bottle 1"
 ```
 
-### 2. Add Descriptive Labels
-Create labels like:
+### 2. Add Descriptive Tags
+
+Create tags like:
+
 - "Spirits"
 - "Liquor"
 - "Alcohol"
@@ -229,25 +237,31 @@ Create labels like:
 - "Garnishes"
 
 ### 3. Use Specific Locations
+
 Instead of:
+
 - ❌ "Kitchen"
 
 Use:
+
 - ✅ "Kitchen - Bar Cabinet"
 - ✅ "Kitchen - Liquor Shelf"
 - ✅ "Bar Cart"
 
 ### 4. Add Descriptions
+
 Include useful details:
+
 ```
 Name: "Tanqueray London Dry Gin"
 Description: "750ml, 47.3% ABV, opened 2024-01"
-Labels: ["Gin", "Spirits", "Alcohol"]
+Tags: ["Gin", "Spirits", "Alcohol"]
 Location: "Bar Cabinet"
 Quantity: 1
 ```
 
 ### 5. Update Quantities
+
 Keep quantities current so the LLM knows what's actually available.
 
 ## Docker Compose Example
@@ -310,6 +324,7 @@ volumes:
 ```
 
 With this setup, use these URLs in the function configuration:
+
 - **HOMEBOX_URL**: `http://homebox:7745`
 
 ## Troubleshooting
@@ -319,6 +334,7 @@ With this setup, use these URLs in the function configuration:
 **Problem:** Function can't log into Homebox
 
 **Solutions:**
+
 1. Check email/password in Valves configuration
 2. Verify credentials work in Homebox web UI
 3. Check for special characters in password
@@ -329,12 +345,15 @@ With this setup, use these URLs in the function configuration:
 **Problem:** Open WebUI can't reach Homebox
 
 **Solutions:**
+
 1. Verify both containers are on same network:
+
    ```bash
    docker network inspect homebox-network
    ```
 
 2. Test connectivity from Open WebUI container:
+
    ```bash
    docker exec -it open-webui curl http://homebox:7745
    ```
@@ -352,10 +371,12 @@ With this setup, use these URLs in the function configuration:
 **Problem:** Function returns empty results
 
 **Solutions:**
+
 1. Check you have items actually added in Homebox
 2. Verify the function is authenticated (check logs)
 3. Try searching for item names you know exist
 4. Check Homebox API is responding:
+
    ```bash
    # Get your auth token
    curl -X POST http://localhost:7745/api/v1/users/login \
@@ -372,6 +393,7 @@ With this setup, use these URLs in the function configuration:
 **Problem:** LLM answers without calling Homebox function
 
 **Solutions:**
+
 1. **Make sure model supports function calling**:
    - Use Llama 3.1+ (not Llama 3.0)
    - Use Mistral 7B+ with function calling
@@ -394,6 +416,7 @@ With this setup, use these URLs in the function configuration:
 **Problem:** Can't see Homebox function in tools list
 
 **Solutions:**
+
 1. Refresh the page completely (Ctrl+F5)
 2. Try a new chat conversation
 3. Check function is saved and enabled in Admin Panel
@@ -422,15 +445,15 @@ Edit the function code and add more methods following the same pattern.
 
 ## Comparison: Open WebUI vs MCP
 
-| Aspect | Open WebUI Functions | MCP Server |
-|--------|---------------------|------------|
-| **Setup Complexity** | Simple (copy/paste) | Complex (server setup) |
-| **Ollama Support** | Native, stable | Experimental |
-| **Claude Support** | No | Yes (primary use case) |
-| **Maintenance** | Low (built-in) | Higher (separate process) |
-| **Docker Friendly** | Yes, perfect for Docker | stdin/stdout issues |
-| **Function Calling** | Native Ollama | Via MCP protocol |
-| **Best For** | Ollama + Open WebUI | Claude Desktop |
+| Aspect               | Open WebUI Functions    | MCP Server                |
+| -------------------- | ----------------------- | ------------------------- |
+| **Setup Complexity** | Simple (copy/paste)     | Complex (server setup)    |
+| **Ollama Support**   | Native, stable          | Experimental              |
+| **Claude Support**   | No                      | Yes (primary use case)    |
+| **Maintenance**      | Low (built-in)          | Higher (separate process) |
+| **Docker Friendly**  | Yes, perfect for Docker | stdin/stdout issues       |
+| **Function Calling** | Native Ollama           | Via MCP protocol          |
+| **Best For**         | Ollama + Open WebUI     | Claude Desktop            |
 
 **For your use case (Ollama + Open WebUI on QNAP), Open WebUI Functions are the clear winner.**
 
@@ -438,7 +461,7 @@ Edit the function code and add more methods following the same pattern.
 
 1. ✅ Install the function following steps above
 2. ✅ Test with a simple query
-3. ✅ Organize your Homebox inventory with clear labels and locations
+3. ✅ Organize your Homebox inventory with clear tags and locations
 4. ✅ Try cocktail recipe queries!
 5. ✅ Explore other use cases (tools, supplies, collections, etc.)
 

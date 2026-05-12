@@ -32,5 +32,6 @@ ENV HOMEBOX_PASSWORD=
 # 2. Environment variables
 # 3. ./config.json (in the app directory)
 
-# Keep container alive - server will be started via docker exec
-CMD ["tail", "-f", "/dev/null"]
+ENV PORT=8811
+
+CMD ["node", "dist/index.js"]

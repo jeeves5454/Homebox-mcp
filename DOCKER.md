@@ -2,20 +2,33 @@
 
 This guide covers deploying the Homebox MCP Server using Docker, with specific instructions for QNAP Container Station users.
 
+## Transport Modes
+
+The server supports two transport modes selected by the `PORT` environment variable:
+
+| Mode                       | When              | Use case                                    |
+| -------------------------- | ----------------- | ------------------------------------------- |
+| **HTTP** (Streamable HTTP) | `PORT` is set     | **claude.ai** and any HTTP-based MCP client |
+| **stdio**                  | `PORT` is not set | **Claude Desktop** via `docker exec`        |
+
+The default `docker-compose.yml` and `Dockerfile` set `PORT=8811`, so HTTP mode is the default for Docker deployments.
+
 ## Table of Contents
 
 - [Quick Start with Docker](#quick-start-with-docker)
+- [Connecting to claude.ai (HTTP Mode)](#connecting-to-claudeai-http-mode)
+- [Connecting to Claude Desktop (stdio Mode)](#connecting-to-claude-desktop-stdio-mode)
 - [QNAP Container Station Deployment](#qnap-container-station-deployment)
 - [Configuration Options](#configuration-options)
 - [Network Configuration](#network-configuration)
-- [Connecting to Claude Desktop](#connecting-to-claude-desktop)
 - [Troubleshooting](#troubleshooting)
 
 ## Quick Start with Docker
 
 ### Method 1: Using Docker Compose (Recommended)
 
-1. **Edit docker-compose.yml** and update your credentials:
+1. **Edit `docker-compose.yml`** and update your credentials:
+
    ```yaml
    environment:
      - HOMEBOX_URL=http://homebox:7745
@@ -24,33 +37,143 @@ This guide covers deploying the Homebox MCP Server using Docker, with specific i
    ```
 
 2. **Start the container:**
+
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
-3. **View logs:**
+3. **Verify it's running:**
+
    ```bash
-   docker-compose logs -f homebox-mcp
+   curl http://localhost:8811/health
+   # → {"status":"ok","version":"1.1.0"}
+   ```
+
+4. **View logs:**
+   ```bash
+   docker compose logs -f homebox-mcp
    ```
 
 ### Method 2: Using Docker CLI
 
-1. **Build the image:**
-   ```bash
-   docker build -t homebox-mcp-server .
+```bash
+docker build -t homebox-mcp-server .
+
+docker run -d \
+  --name homebox-mcp-server \
+  --restart unless-stopped \
+  -e HOMEBOX_URL=http://homebox:7745 \
+  -e HOMEBOX_EMAIL=your-email@example.com \
+  -e HOMEBOX_PASSWORD=your-password \
+  -e PORT=8811 \
+  -p 8811:8811 \
+  --network homebox-network \
+  homebox-mcp-server
+```
+
+## Connecting to claude.ai (HTTP Mode)
+
+The container exposes an MCP-over-HTTP endpoint at `http://<host>:8811/mcp`. claude.ai connects to this directly as a remote MCP server.
+
+### Requirements
+
+- Port 8811 must be reachable from the internet (or from Cloudflare Tunnel / ngrok / etc.)
+- The container must be running with `PORT=8811` (the default)
+
+### Setup
+
+1. Make sure your container is running and port 8811 is exposed (it is by default in `docker-compose.yml`).
+
+2. If your server is behind NAT, expose port 8811 publicly. Options:
+   - **Cloudflare Tunnel** (recommended — no open ports required):
+     ```bash
+     cloudflared tunnel --url http://localhost:8811
+     ```
+   - **Port forwarding** on your router: forward external port 8811 → internal host:8811
+   - **Reverse proxy** (nginx, Caddy, Traefik) with TLS termination
+
+3. In claude.ai, go to **Settings → Integrations → Add custom integration** and enter:
+
+   ```
+   https://your-host-or-tunnel-url/mcp
    ```
 
-2. **Run the container:**
-   ```bash
-   docker run -d \
-     --name homebox-mcp-server \
-     --restart unless-stopped \
-     -e HOMEBOX_URL=http://homebox:7745 \
-     -e HOMEBOX_EMAIL=your-email@example.com \
-     -e HOMEBOX_PASSWORD=your-password \
-     --network homebox-network \
-     homebox-mcp-server
+4. Claude will connect, authenticate, and list the available tools automatically.
+
+### Health Check
+
+```
+GET http://localhost:8811/health
+→ {"status":"ok","version":"1.1.0"}
+```
+
+## Connecting to Claude Desktop (stdio Mode)
+
+Claude Desktop launches the MCP server as a subprocess and communicates over stdio. The simplest way to do this with Docker is `docker exec`.
+
+### Using docker exec
+
+1. Start the container **without** `PORT` set (or override it to empty) so it runs in stdio mode:
+
+   ```yaml
+   # docker-compose.yml excerpt
+   environment:
+     - HOMEBOX_URL=http://homebox:7745
+     - HOMEBOX_EMAIL=your-email@example.com
+     - HOMEBOX_PASSWORD=your-password
+     # omit PORT to use stdio mode
    ```
+
+   Or keep `PORT=8811` running and just use `docker exec` to launch a separate stdio process inside the same container — this works fine since the server binary decides its mode at startup based on `PORT`.
+
+2. Edit your Claude Desktop config:
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+   ```json
+   {
+     "mcpServers": {
+       "homebox": {
+         "command": "docker",
+         "args": [
+           "exec",
+           "-i",
+           "homebox-mcp-server",
+           "node",
+           "/app/dist/index.js"
+         ],
+         "env": {}
+       }
+     }
+   }
+   ```
+
+   > `docker exec -i` attaches stdin/stdout to the new process. `PORT` is not set in this exec context, so the server starts in stdio mode even if the container's default is HTTP mode.
+
+3. Restart Claude Desktop.
+
+### For Remote QNAP (SSH)
+
+```json
+{
+  "mcpServers": {
+    "homebox": {
+      "command": "ssh",
+      "args": [
+        "user@your-qnap-ip",
+        "docker",
+        "exec",
+        "-i",
+        "homebox-mcp-server",
+        "node",
+        "/app/dist/index.js"
+      ]
+    }
+  }
+}
+```
+
+SSH key authentication must be configured (password auth won't work with Claude Desktop).
 
 ## QNAP Container Station Deployment
 
@@ -66,55 +189,37 @@ This guide covers deploying the Homebox MCP Server using Docker, with specific i
 
 2. **Create a folder** for the MCP server:
    - Location: `/share/Container/homebox-mcp`
-   - Or use any shared folder you prefer
 
-3. **Upload these files** to that folder:
-   - All files from this repository
-   - OR clone the repository directly on QNAP:
-     ```bash
-     cd /share/Container
-     git clone <your-repo-url> homebox-mcp
-     cd homebox-mcp
-     ```
+3. **Clone the repository:**
+   ```bash
+   cd /share/Container
+   git clone <your-repo-url> homebox-mcp
+   cd homebox-mcp
+   ```
 
 ### Step 2: Configure Your Settings
 
-**Option A: Using Environment Variables (Recommended)**
+**Option A: Environment Variables (Recommended)**
 
-You'll set these in Container Station when creating the container (Step 3).
+Set these in Container Station when creating the container (Step 3).
 
-**Option B: Using a Config File**
+**Option B: Config File**
 
-1. Create `config.json` in `/share/Container/homebox-mcp`:
-   ```json
-   {
-     "homeboxUrl": "http://homebox:7745",
-     "email": "your-email@example.com",
-     "password": "your-password"
-   }
-   ```
-
-2. Set proper permissions:
-   ```bash
-   chmod 600 /share/Container/homebox-mcp/config.json
-   ```
+```bash
+cp config.json.example /share/Container/homebox-mcp/config.json
+# edit config.json with your credentials
+chmod 600 /share/Container/homebox-mcp/config.json
+```
 
 ### Step 3: Deploy in Container Station
 
-#### Method A: Using the Container Station UI
+#### Using the Container Station UI
 
-1. **Open Container Station** on your QNAP
+1. Open Container Station → **Images** → **Create** → **Create Application**
 
-2. **Go to Images** tab
+2. Paste this configuration (adjust network name to match your Homebox container):
 
-3. **Click "Create" → "Create Application"**
-
-4. **Paste this configuration:**
-
-   **If using environment variables:**
    ```yaml
-   version: '3.8'
-
    services:
      homebox-mcp:
        build: /share/Container/homebox-mcp
@@ -124,86 +229,59 @@ You'll set these in Container Station when creating the container (Step 3).
          - HOMEBOX_URL=http://homebox:7745
          - HOMEBOX_EMAIL=your-email@example.com
          - HOMEBOX_PASSWORD=your-password
+         - PORT=8811
+       ports:
+         - "8811:8811"
        networks:
          - qnet-static-eth0-your-network-id
    ```
 
-   **If using config file:**
+   To use a mounted config file instead of environment variables:
+
    ```yaml
-   version: '3.8'
-
-   services:
-     homebox-mcp:
-       build: /share/Container/homebox-mcp
-       container_name: homebox-mcp-server
-       restart: unless-stopped
-       volumes:
-         - /share/Container/homebox-mcp/config.json:/config/config.json:ro
-       networks:
-         - qnet-static-eth0-your-network-id
+   volumes:
+     - /share/Container/homebox-mcp/config.json:/config/config.json:ro
    ```
 
-5. **Important Network Configuration:**
-   - Replace `qnet-static-eth0-your-network-id` with your actual network name
-   - To find this, check your Homebox container's network settings in Container Station
-   - Both containers MUST be on the same network to communicate
+3. Replace `qnet-static-eth0-your-network-id` with your actual network name (must match Homebox's network).
 
-6. **Click "Validate and Apply"**
+4. Click **Validate and Apply** → **Create**.
 
-7. **Click "Create"** to build and start the container
+#### Using Docker CLI on QNAP
 
-#### Method B: Using Docker CLI on QNAP
+```bash
+cd /share/Container/homebox-mcp
+docker build -t homebox-mcp-server .
 
-1. **SSH into your QNAP**
+# Find your Homebox network
+docker inspect homebox --format='{{.HostConfig.NetworkMode}}'
+# e.g. qnet-static-eth0-xxxxxx
 
-2. **Navigate to the folder:**
-   ```bash
-   cd /share/Container/homebox-mcp
-   ```
-
-3. **Build the image:**
-   ```bash
-   docker build -t homebox-mcp-server .
-   ```
-
-4. **Find your Homebox network:**
-   ```bash
-   docker inspect homebox | grep NetworkMode
-   ```
-   This will show something like `qnet-static-eth0-xxxxxx`
-
-5. **Run the container:**
-   ```bash
-   docker run -d \
-     --name homebox-mcp-server \
-     --restart unless-stopped \
-     -e HOMEBOX_URL=http://homebox:7745 \
-     -e HOMEBOX_EMAIL=your-email@example.com \
-     -e HOMEBOX_PASSWORD=your-password \
-     --network qnet-static-eth0-xxxxxx \
-     homebox-mcp-server
-   ```
+docker run -d \
+  --name homebox-mcp-server \
+  --restart unless-stopped \
+  -e HOMEBOX_URL=http://homebox:7745 \
+  -e HOMEBOX_EMAIL=your-email@example.com \
+  -e HOMEBOX_PASSWORD=your-password \
+  -e PORT=8811 \
+  -p 8811:8811 \
+  --network qnet-static-eth0-xxxxxx \
+  homebox-mcp-server
+```
 
 ### Step 4: Verify Deployment
 
-1. **Check container logs** in Container Station or via CLI:
-   ```bash
-   docker logs homebox-mcp-server
-   ```
+```bash
+docker logs homebox-mcp-server
+# Should show: Homebox MCP Server running on HTTP port 8811
 
-2. **You should see:**
-   ```
-   Starting Homebox MCP Server...
-   Loaded configuration from environment variables
-   Successfully authenticated with Homebox
-   Homebox MCP Server running on stdio
-   ```
-
-3. **If you see errors**, check the [Troubleshooting](#troubleshooting) section
+curl http://localhost:8811/health
+# → {"status":"ok","version":"1.1.0"}
+```
 
 ## Configuration Options
 
-The MCP server supports three configuration methods (in priority order):
+The server reads credentials in this priority order:
 
 ### 1. Environment Variables (Best for Docker)
 
@@ -223,264 +301,113 @@ volumes:
 
 ### 3. Built-in Config File
 
-Include config.json when building the image (not recommended for security).
+Include `config.json` at build time (not recommended — credentials end up in the image layer).
 
 ## Network Configuration
 
 ### Finding Your Homebox Container Network
 
-**Option 1: Container Station UI**
-1. Open Container Station
-2. Click on your Homebox container
-3. Go to "Network" section
-4. Note the network name (e.g., `qnet-static-eth0-xxxxx`)
-
-**Option 2: Docker CLI**
 ```bash
 docker inspect homebox --format='{{.HostConfig.NetworkMode}}'
 ```
 
 ### Connecting Both Containers
 
-The MCP server must be on the **same Docker network** as Homebox:
+Both containers must be on the same Docker network so the MCP server can reach Homebox by container name:
 
 ```yaml
 networks:
-  - qnet-static-eth0-xxxxx  # Same as Homebox
+  - qnet-static-eth0-xxxxx # same as Homebox
 ```
 
-### Important Notes
-
-- **Container names vs hostnames**: In your HOMEBOX_URL, use the container name as the hostname
-  - If your Homebox container is named "homebox", use `http://homebox:7745`
-  - If it's named "homebox-app", use `http://homebox-app:7745`
-  - Check the container name in Container Station
-
-- **Port mapping**: The MCP server uses stdio (standard input/output), so no port mapping is needed
-  - Homebox typically runs on port 7745 inside the container
-  - The MCP server accesses it via the internal Docker network
-
-## Connecting to Claude Desktop
-
-Once your Docker container is running, you need to configure Claude Desktop to connect to it.
-
-### Method 1: Using Docker Exec (Recommended for QNAP)
-
-Since the MCP server runs in a container, you'll use `docker exec` to interact with it:
-
-1. **Edit Claude Desktop config:**
-   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-2. **Add this configuration:**
-
-   **For local Docker/QNAP on same network:**
-   ```json
-   {
-     "mcpServers": {
-       "homebox": {
-         "command": "docker",
-         "args": [
-           "exec",
-           "-i",
-           "homebox-mcp-server",
-           "node",
-           "/app/dist/index.js"
-         ]
-       }
-     }
-   }
-   ```
-
-   **For remote QNAP (using SSH):**
-   ```json
-   {
-     "mcpServers": {
-       "homebox": {
-         "command": "ssh",
-         "args": [
-           "user@your-qnap-ip",
-           "docker",
-           "exec",
-           "-i",
-           "homebox-mcp-server",
-           "node",
-           "/app/dist/index.js"
-         ]
-       }
-     }
-   }
-   ```
-
-3. **Restart Claude Desktop**
-
-### Method 2: Exposing via SSH Tunnel
-
-If you prefer, you can set up an SSH tunnel to access the container:
-
-1. **On your local machine:**
-   ```bash
-   ssh -L 9000:localhost:9000 user@your-qnap-ip
-   ```
-
-2. **Modify the Dockerfile** to add an HTTP wrapper (advanced - not recommended for beginners)
-
-### Testing the Connection
-
-Ask Claude: "Can you list all locations in my Homebox inventory?"
-
-If it works, you should see your Homebox locations!
+Use the container name as the hostname in `HOMEBOX_URL` (e.g. `http://homebox:7745`).
 
 ## Troubleshooting
 
-### Container won't start
+### Container won't start / exits immediately
 
-**Check logs:**
 ```bash
 docker logs homebox-mcp-server
 ```
 
-**Common issues:**
-- Missing environment variables
-- Invalid JSON in config.json
-- Permission issues with config file
+Common causes:
 
-### "Authentication failed"
+- Missing environment variables (`HOMEBOX_URL`, `HOMEBOX_EMAIL`, `HOMEBOX_PASSWORD`)
+- Invalid `config.json` syntax
+- Permission denied on config file
 
-**Possible causes:**
-1. Wrong email or password in environment variables
-2. Homebox container not running
-3. Network issue between containers
+### "Authentication failed" in logs
 
-**Solutions:**
-- Verify credentials: `docker logs homebox-mcp-server`
-- Check Homebox is running: `docker ps | grep homebox`
-- Verify both containers on same network
+- Wrong email or password
+- Homebox container not running or not reachable
+- Containers on different networks
 
-### "Cannot connect to Homebox" or "ECONNREFUSED"
+Verify network reachability:
 
-**Possible causes:**
-1. Containers on different networks
-2. Wrong Homebox URL
-3. Homebox not running
+```bash
+docker exec homebox-mcp-server wget -qO- http://homebox:7745/api/v1/status
+```
 
-**Solutions:**
-1. **Check networks match:**
-   ```bash
-   docker inspect homebox-mcp-server --format='{{.HostConfig.NetworkMode}}'
-   docker inspect homebox --format='{{.HostConfig.NetworkMode}}'
-   ```
-   These should be identical.
+### Health check returns nothing / connection refused
 
-2. **Check Homebox container name:**
-   ```bash
-   docker ps --format '{{.Names}}' | grep homebox
-   ```
-   Use this exact name in HOMEBOX_URL
+- Confirm `PORT=8811` is set in the container environment
+- Confirm `-p 8811:8811` port mapping is present
+- Confirm the container is running: `docker ps | grep homebox-mcp`
 
-3. **Verify Homebox is accessible:**
-   ```bash
-   docker exec homebox-mcp-server ping homebox -c 3
-   ```
+### claude.ai can't reach the server
 
-### Claude Desktop can't connect
+- Port 8811 must be publicly reachable (or tunnelled). Test from outside your network:
+  ```
+  curl https://your-public-url/health
+  ```
+- If behind NAT with no tunnel, set up Cloudflare Tunnel or configure port forwarding.
 
-**For `docker exec` method:**
-1. Verify Docker is accessible from your terminal:
-   ```bash
-   docker ps
-   ```
+### Claude Desktop can't connect (docker exec method)
 
-2. Verify container is running:
-   ```bash
-   docker ps | grep homebox-mcp-server
-   ```
+Verify the exec command works manually:
 
-3. Test manual connection:
-   ```bash
-   docker exec -i homebox-mcp-server node /app/dist/index.js
-   ```
-   (Press Ctrl+C to exit)
+```bash
+docker exec -i homebox-mcp-server node /app/dist/index.js
+# Should print startup logs to stderr, then wait for JSON-RPC on stdin
+# Press Ctrl+C to exit
+```
 
-**For SSH method:**
-1. Test SSH connection:
-   ```bash
-   ssh user@your-qnap-ip docker ps
-   ```
-
-2. Verify SSH keys are set up (password auth won't work with Claude)
+If this fails, check that the container is running and the image was built successfully.
 
 ### Container keeps restarting
 
-**Check logs for error messages:**
 ```bash
-docker logs homebox-mcp-server --tail 100
+docker logs homebox-mcp-server --tail 50
 ```
 
-**Common causes:**
-- Configuration error causing immediate exit
-- Authentication failure
-- Missing dependencies (shouldn't happen with proper Docker build)
-
-### "No configuration found"
-
-The container couldn't find configuration. Verify:
-
-1. **Environment variables are set:**
-   ```bash
-   docker inspect homebox-mcp-server --format='{{.Config.Env}}'
-   ```
-   Should show HOMEBOX_URL, HOMEBOX_EMAIL, HOMEBOX_PASSWORD
-
-2. **OR config file is mounted:**
-   ```bash
-   docker exec homebox-mcp-server ls -la /config/
-   ```
-   Should show config.json
+Usually a configuration error on startup. Fix the credentials or config file, then restart.
 
 ## Updating the Container
 
-To update the MCP server with new code:
-
-1. **Stop and remove old container:**
-   ```bash
-   docker stop homebox-mcp-server
-   docker rm homebox-mcp-server
-   ```
-
-2. **Pull latest code:**
-   ```bash
-   cd /share/Container/homebox-mcp
-   git pull
-   ```
-
-3. **Rebuild image:**
-   ```bash
-   docker build -t homebox-mcp-server .
-   ```
-
-4. **Start new container** (use same docker run command as before)
-
-Or with docker-compose:
 ```bash
-docker-compose down
+# With docker compose
+docker compose down
 git pull
-docker-compose up -d --build
+docker compose up -d --build
+
+# With docker CLI
+docker stop homebox-mcp-server && docker rm homebox-mcp-server
+git pull
+docker build -t homebox-mcp-server .
+docker run -d ...  # same flags as before
 ```
 
-## Security Best Practices
+## Security Notes
 
-1. **Use environment variables** instead of config files when possible
-2. **Set restrictive permissions** on config.json: `chmod 600 config.json`
-3. **Use secrets management** for production (Docker secrets, etc.)
-4. **Regularly update** the container image
-5. **Use HTTPS** for Homebox if exposed to internet
-6. **Don't expose MCP server ports** - it should only communicate via stdio
+- Credentials in environment variables are visible via `docker inspect`. For production, use [Docker secrets](https://docs.docker.com/engine/swarm/secrets/) or a secrets manager.
+- The `/mcp` endpoint has no authentication layer — place it behind a reverse proxy with TLS if exposing publicly, or use Cloudflare Tunnel which provides its own security layer.
+- The `/health` endpoint leaks the server version but no credentials.
+- `config.json` should have permissions `600` if used.
 
 ## Additional Resources
 
 - [Main README](README.md) - General setup and usage
 - [EXAMPLES.md](EXAMPLES.md) - Query examples
-- [QUICKSTART.md](QUICKSTART.md) - Non-Docker setup guide
+- [QNAP Native Installation](QNAP-NATIVE.md)
 - [Homebox Documentation](https://homebox.software/)
 - [QNAP Container Station Guide](https://www.qnap.com/en/how-to/tutorial/article/how-to-use-container-station)

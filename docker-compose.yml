@@ -21,10 +21,9 @@ services:
     networks:
       - homebox-network
 
-    # Port mapping is not needed for MCP server (uses stdio)
-    # but you can expose for debugging if needed
-    # ports:
-    #   - "3000:3000"
+    # Expose the HTTP/SSE port for claude.ai and other HTTP-based MCP clients
+    ports:
+      - "8811:8811"
 
 # If Homebox is in a separate docker-compose, you can reference its network
 networks:
