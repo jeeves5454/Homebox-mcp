@@ -11,6 +11,7 @@ Claude Desktop → SSH → Node.js process (direct) ✓
 ```
 
 Instead of:
+
 ```
 Claude Desktop → SSH → wrapper → docker exec → container ✗
 ```
@@ -27,11 +28,13 @@ Claude Desktop → SSH → wrapper → docker exec → container ✗
 ### Step 1: Install Node.js on QNAP
 
 SSH into your QNAP:
+
 ```bash
 ssh admin@your-qnap-ip
 ```
 
 Check if Node.js is already installed:
+
 ```bash
 node --version
 ```
@@ -39,6 +42,7 @@ node --version
 **If Node.js is not installed**, install it via Entware:
 
 1. Install Entware (if not already installed):
+
    ```bash
    # Check if Entware is installed
    which opkg
@@ -49,6 +53,7 @@ node --version
    ```
 
 2. Install Node.js via Entware:
+
    ```bash
    opkg update
    opkg install node
@@ -64,6 +69,7 @@ node --version
 ### Step 2: Create Installation Directory
 
 Create a dedicated directory for the MCP server:
+
 ```bash
 # Create directory in your home folder
 mkdir -p /share/homes/admin/homebox-mcp
@@ -77,6 +83,7 @@ cd /share/homes/admin/homebox-mcp
 **Option A: Using Git (Recommended)**
 
 If git is available:
+
 ```bash
 git clone https://github.com/jeeves5454/Homebox-mcp.git .
 npm install
@@ -88,12 +95,14 @@ npm run build
 If git is not available, download from your computer and transfer:
 
 1. On your computer, download the repository:
+
    ```bash
    git clone https://github.com/jeeves5454/Homebox-mcp.git
    cd Homebox-mcp
    ```
 
 2. Transfer to QNAP using SCP:
+
    ```bash
    scp -r * admin@your-qnap-ip:/share/homes/admin/homebox-mcp/
    ```
@@ -108,12 +117,14 @@ If git is not available, download from your computer and transfer:
 ### Step 4: Configure the Server
 
 Create a configuration file:
+
 ```bash
 cd /share/homes/admin/homebox-mcp
 nano config.json
 ```
 
 Paste this configuration (adjust values for your setup):
+
 ```json
 {
   "homeboxUrl": "http://localhost:7745",
@@ -123,6 +134,7 @@ Paste this configuration (adjust values for your setup):
 ```
 
 **Important:** Adjust `homeboxUrl` based on how your Homebox is running:
+
 - If Homebox is in Docker with port 7745 exposed: `http://localhost:7745`
 - If Homebox is in Docker with a custom port: `http://localhost:YOUR_PORT`
 - If Homebox is native on QNAP: `http://localhost:7745`
@@ -130,6 +142,7 @@ Paste this configuration (adjust values for your setup):
 Save and exit (Ctrl+X, then Y, then Enter in nano)
 
 Secure the config file:
+
 ```bash
 chmod 600 config.json
 ```
@@ -137,12 +150,14 @@ chmod 600 config.json
 ### Step 5: Test the Server
 
 Test that the server can start and authenticate:
+
 ```bash
 cd /share/homes/admin/homebox-mcp
 node dist/index.js
 ```
 
 You should see:
+
 ```
 ============================================================
 Homebox MCP Server v1.1.0
@@ -156,6 +171,7 @@ Homebox MCP Server running on stdio
 **Press Ctrl+C to stop the test.**
 
 If you see errors:
+
 - "Authentication failed" - Check your email/password in config.json
 - "Cannot connect" - Check the homeboxUrl in config.json
 - "config.json not found" - Make sure you're in the right directory
@@ -163,11 +179,13 @@ If you see errors:
 ### Step 6: Create a Wrapper Script
 
 Create a simple wrapper script that Claude Desktop will use:
+
 ```bash
 nano /share/homes/admin/mcp-start.sh
 ```
 
 Paste this content:
+
 ```bash
 #!/bin/sh
 cd /share/homes/admin/homebox-mcp
@@ -175,6 +193,7 @@ exec node dist/index.js 2>/share/homes/admin/mcp-stderr.log
 ```
 
 Make it executable:
+
 ```bash
 chmod +x /share/homes/admin/mcp-start.sh
 ```
@@ -184,6 +203,7 @@ chmod +x /share/homes/admin/mcp-start.sh
 ### Step 7: Test the Wrapper Script
 
 Test the wrapper from your local computer:
+
 ```bash
 echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"roots":{"listChanged":true},"sampling":{}},"clientInfo":{"name":"test","version":"1.0.0"}},"id":0}' | ssh admin@your-qnap-ip /share/homes/admin/mcp-start.sh
 ```
@@ -193,25 +213,25 @@ You should get a JSON response back immediately showing the server's capabilitie
 ### Step 8: Configure Claude Desktop
 
 Edit your Claude Desktop config file:
+
 - **Windows**: `%APPDATA%\Claude\config.json`
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 Add this configuration:
+
 ```json
 {
   "mcpServers": {
     "homebox": {
       "command": "ssh",
-      "args": [
-        "admin@your-qnap-ip",
-        "/share/homes/admin/mcp-start.sh"
-      ]
+      "args": ["admin@your-qnap-ip", "/share/homes/admin/mcp-start.sh"]
     }
   }
 }
 ```
 
 **Important:** Replace:
+
 - `admin@your-qnap-ip` with your actual QNAP username and IP
 - The path if you used a different location
 
@@ -220,6 +240,7 @@ Add this configuration:
 Make sure you have SSH key authentication set up (Claude Desktop requires this):
 
 **On Windows (PowerShell):**
+
 ```powershell
 # Generate key if you don't have one
 ssh-keygen -t rsa -b 4096
@@ -232,6 +253,7 @@ ssh admin@your-qnap-ip echo "success"
 ```
 
 **On macOS/Linux:**
+
 ```bash
 # Generate key if you don't have one
 ssh-keygen -t rsa -b 4096
@@ -260,6 +282,7 @@ If it works, you'll see your Homebox locations listed! 🎉
 **Problem:** Error when running `node dist/index.js`
 
 **Solutions:**
+
 1. Check Node.js version: `node --version` (should be 18+)
 2. Rebuild: `cd /share/homes/admin/homebox-mcp && npm run build`
 3. Check config.json exists and has correct JSON syntax
@@ -270,6 +293,7 @@ If it works, you'll see your Homebox locations listed! 🎉
 **Problem:** "Authentication failed with Homebox"
 
 **Solutions:**
+
 1. Verify credentials are correct in config.json
 2. Test login manually in Homebox web UI
 3. Check for special characters in password that need escaping in JSON
@@ -280,6 +304,7 @@ If it works, you'll see your Homebox locations listed! 🎉
 **Problem:** "Error connecting to Homebox at http://..."
 
 **Solutions:**
+
 1. Check Homebox is actually running:
    ```bash
    curl http://localhost:7745
@@ -299,19 +324,25 @@ If it works, you'll see your Homebox locations listed! 🎉
 **Problem:** "Server disconnected" in Claude Desktop logs
 
 **Solutions:**
+
 1. Test the SSH command manually:
+
    ```bash
    ssh admin@your-qnap-ip /share/homes/admin/mcp-start.sh
    ```
+
    Should start the server (Ctrl+C to stop)
 
 2. Check SSH keys work without password:
+
    ```bash
    ssh admin@your-qnap-ip echo "test"
    ```
+
    Should print "test" without asking for password
 
 3. Check the wrapper script path is correct:
+
    ```bash
    ssh admin@your-qnap-ip "ls -la /share/homes/admin/mcp-start.sh"
    ```
@@ -326,12 +357,15 @@ If it works, you'll see your Homebox locations listed! 🎉
 **Problem:** "Permission denied" when trying to run scripts
 
 **Solutions:**
+
 1. Make wrapper executable:
+
    ```bash
    chmod +x /share/homes/admin/mcp-start.sh
    ```
 
 2. Check directory permissions:
+
    ```bash
    ls -la /share/homes/admin/homebox-mcp
    ```
@@ -367,20 +401,21 @@ Then remove the "homebox" entry from your Claude Desktop config.json.
 
 ## Comparison: Docker vs Native
 
-| Aspect | Docker | Native |
-|--------|--------|--------|
-| **Setup Complexity** | Easier initial setup | More steps |
-| **Claude Desktop Compatibility** | Issues with stdin/stdout | Reliable |
-| **Updates** | Pull new image | Git pull + rebuild |
-| **Isolation** | Containerized | Runs on host |
-| **Resource Usage** | Higher (container overhead) | Lower |
-| **Debugging** | More complex (docker exec) | Easier (direct access) |
+| Aspect                           | Docker                      | Native                 |
+| -------------------------------- | --------------------------- | ---------------------- |
+| **Setup Complexity**             | Easier initial setup        | More steps             |
+| **Claude Desktop Compatibility** | Issues with stdin/stdout    | Reliable               |
+| **Updates**                      | Pull new image              | Git pull + rebuild     |
+| **Isolation**                    | Containerized               | Runs on host           |
+| **Resource Usage**               | Higher (container overhead) | Lower                  |
+| **Debugging**                    | More complex (docker exec)  | Easier (direct access) |
 
 For Claude Desktop connectivity, **native installation is recommended** due to the stdin/stdout compatibility issues with the Docker approach on Windows.
 
 ## Security Notes
 
 1. **Secure config.json** - Contains your Homebox password:
+
    ```bash
    chmod 600 /share/homes/admin/homebox-mcp/config.json
    ```
@@ -390,6 +425,7 @@ For Claude Desktop connectivity, **native installation is recommended** due to t
 3. **Restrict SSH access** - Consider firewall rules to limit SSH to trusted IPs
 
 4. **Keep Node.js updated** - Regularly update via Entware:
+
    ```bash
    opkg update && opkg upgrade node node-npm
    ```
