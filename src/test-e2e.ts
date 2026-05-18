@@ -1,0 +1,601 @@
+#!/usr/bin/env node
+
+/**
+ * E2E test suite for the Homebox MCP server.
+ *
+ * Lifecycle:
+ *   1. docker compose -f docker-compose.test.yml up (Homebox + MCP image)
+ *   2. Register a fresh test user via the Homebox REST API
+ *   3. For each test case: spawn MCP server via docker compose run, run the case, assert clean state
+ *   4. If a case leaves dirty state: tear down and recreate the stack, then fail the suite
+ *   5. docker compose -f docker-compose.test.yml down --volumes on exit
+ */
+
+import { spawn, execSync, ChildProcess } from "child_process";
+import axios, { AxiosInstance } from "axios";
+import * as readline from "readline";
+
+// ── Configuration ────────────────────────────────────────────────────────────
+
+const TEST_EMAIL = "test@homebox-mcp.test";
+const TEST_PASSWORD = "TestPassword123!";
+const TEST_USERNAME = "Test User";
+const HOMEBOX_URL = "http://localhost:7745";
+const COMPOSE_FILE = "docker-compose.test.yml";
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+interface McpRequest {
+  jsonrpc: "2.0";
+  id: number;
+  method: string;
+  params: Record<string, any>;
+}
+
+interface McpResponse {
+  jsonrpc: "2.0";
+  id: number;
+  result?: any;
+  error?: { code: number; message: string };
+}
+
+interface TestContext {
+  callTool: (name: string, args: Record<string, any>) => Promise<any>;
+}
+
+interface TestCase {
+  name: string;
+  run: (ctx: TestContext) => Promise<void>;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function composeCmd(args: string): string {
+  return `docker compose -f ${COMPOSE_FILE} ${args}`;
+}
+
+function exec(cmd: string): void {
+  execSync(cmd, { stdio: "inherit" });
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForHomebox(timeoutMs = 60_000): Promise<AxiosInstance> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const client = axios.create({ baseURL: HOMEBOX_URL, timeout: 3000 });
+      await client.get("/api/v1/status");
+      return client;
+    } catch {
+      await sleep(2000);
+    }
+  }
+  throw new Error("Homebox did not become healthy within timeout");
+}
+
+async function registerTestUser(client: AxiosInstance): Promise<void> {
+  try {
+    await client.post("/api/v1/users/register", {
+      name: TEST_USERNAME,
+      email: TEST_EMAIL,
+      password: TEST_PASSWORD,
+    });
+    console.log(`  ✅ Registered test user: ${TEST_EMAIL}`);
+  } catch (error: any) {
+    // 400/409/500 may mean already registered (Homebox returns 500 on duplicate email)
+    if (error.response?.status === 400 || error.response?.status === 409 || error.response?.status === 500) {
+      console.log("  ℹ️  Test user already exists, continuing");
+    } else {
+      throw new Error(`Failed to register test user: ${error.message}`);
+    }
+  }
+}
+
+// ── MCP client (stdio over docker compose run) ───────────────────────────────
+
+class McpClient {
+  private proc: ChildProcess;
+  private rl: readline.Interface;
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  private nextId = 1;
+
+  constructor() {
+    this.proc = spawn("docker", [
+      "compose", "-f", COMPOSE_FILE,
+      "run", "--rm", "--no-deps",
+      "-e", `HOMEBOX_EMAIL=${TEST_EMAIL}`,
+      "-e", `HOMEBOX_PASSWORD=${TEST_PASSWORD}`,
+      "homebox-mcp",
+      "node", "dist/index.js",
+    ], { stdio: ["pipe", "pipe", "ignore"] });
+
+    this.rl = readline.createInterface({ input: this.proc.stdout! });
+    this.rl.on("line", (line) => {
+      try {
+        const msg: McpResponse = JSON.parse(line);
+        const pending = this.pending.get(msg.id);
+        if (!pending) return;
+        this.pending.delete(msg.id);
+        if (msg.error) {
+          pending.reject(new Error(`MCP error ${msg.error.code}: ${msg.error.message}`));
+        } else {
+          pending.resolve(msg.result);
+        }
+      } catch {
+        // stderr noise or non-JSON line — ignore
+      }
+    });
+
+    this.proc.on("error", (err) => {
+      for (const p of this.pending.values()) p.reject(err);
+      this.pending.clear();
+    });
+  }
+
+  async initialize(): Promise<void> {
+    await this.send("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "e2e-test", version: "1" },
+    });
+  }
+
+  async callTool(name: string, args: Record<string, any>): Promise<any> {
+    const result = await this.send("tools/call", { name, arguments: args });
+    if (result?.isError) {
+      throw new Error(`Tool error: ${result.content?.[0]?.text ?? "unknown"}`);
+    }
+    const text = result?.content?.[0]?.text;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+
+  private send(method: string, params: Record<string, any>): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const id = this.nextId++;
+      const req: McpRequest = { jsonrpc: "2.0", id, method, params };
+      this.pending.set(id, { resolve, reject });
+      this.proc.stdin!.write(JSON.stringify(req) + "\n");
+    });
+  }
+
+  async close(): Promise<void> {
+    this.rl.close();
+    this.proc.stdin!.end();
+    await new Promise<void>((resolve) => this.proc.on("close", resolve));
+  }
+}
+
+// ── Stack management ──────────────────────────────────────────────────────────
+
+function stackUp(): void {
+  console.log("\n🐳 Starting test stack...");
+  // Always tear down first to ensure a clean volume — scoped to this compose file only
+  exec(composeCmd("down --volumes --remove-orphans"));
+  exec(composeCmd("build homebox-mcp"));
+  exec(composeCmd("up -d --wait homebox"));
+}
+
+function stackDown(): void {
+  console.log("\n🐳 Tearing down test stack...");
+  try {
+    exec(composeCmd("down --volumes --remove-orphans"));
+  } catch {
+    // best-effort
+  }
+}
+
+function stackRecreate(): void {
+  console.log("\n⚠️  Dirty state detected — recreating test stack...");
+  stackDown();
+  stackUp();
+}
+
+// ── Test runner ───────────────────────────────────────────────────────────────
+
+let passed = 0;
+let failed = 0;
+
+async function runTestCase(tc: TestCase): Promise<boolean> {
+  process.stdout.write(`  • ${tc.name} ... `);
+  const client = new McpClient();
+  try {
+    await client.initialize();
+    await tc.run({ callTool: (n, a) => client.callTool(n, a) });
+    await client.close();
+    console.log("✅");
+    passed++;
+    return true;
+  } catch (error: any) {
+    await client.close().catch(() => {});
+    console.log(`❌\n    ${error.message}`);
+    failed++;
+    return false;
+  }
+}
+
+// ── Test cases ────────────────────────────────────────────────────────────────
+//
+// Invariant: every test case must leave the database in the same state it found
+// it. The first test wipes all seeded data so subsequent tests start from a
+// known-empty state and can assert precisely.
+
+const TEST_CASES: TestCase[] = [
+  {
+    name: "wipe all seeded entities to establish a clean baseline",
+    async run({ callTool }) {
+      // Items must be deleted before locations (cascade risk)
+      const itemsResult = await callTool("search_items", { query: "" });
+      const items = itemsResult?.items ?? itemsResult ?? [];
+      for (const item of items) {
+        await callTool("delete_item", { itemId: item.id });
+      }
+
+      const locations = await callTool("list_locations", {});
+      for (const loc of (locations as any[])) {
+        await callTool("delete_location", { locationId: loc.id });
+      }
+
+      const tags = await callTool("list_tags", {});
+      for (const tag of (tags as any[])) {
+        await callTool("delete_tag", { tagId: tag.id });
+      }
+
+      // Verify clean state
+      const remainingLocations = await callTool("list_locations", {});
+      if ((remainingLocations as any[]).length !== 0)
+        throw new Error(`Expected 0 locations after wipe, got ${(remainingLocations as any[]).length}`);
+      const remainingTags = await callTool("list_tags", {});
+      if ((remainingTags as any[]).length !== 0)
+        throw new Error(`Expected 0 tags after wipe, got ${(remainingTags as any[]).length}`);
+    },
+  },
+
+  {
+    name: "locations: create, read, then delete",
+    async run({ callTool }) {
+      const created = await callTool("create_location", { name: "Test Location", description: "e2e test location" });
+      if (!created.id) throw new Error("Expected created location to have an id");
+
+      const listed = await callTool("list_locations", {});
+      if (!(listed as any[]).find((l: any) => l.id === created.id))
+        throw new Error("Created location not found in list_locations");
+
+      const fetched = await callTool("get_location", { locationId: created.id });
+      if (fetched.id !== created.id) throw new Error("get_location returned wrong id");
+      if (fetched.name !== "Test Location") throw new Error(`Expected name 'Test Location', got '${fetched.name}'`);
+
+      await callTool("delete_location", { locationId: created.id });
+
+      const after = await callTool("list_locations", {});
+      if ((after as any[]).find((l: any) => l.id === created.id))
+        throw new Error("Location still present after delete");
+    },
+  },
+
+  {
+    name: "tags: create, read, then delete",
+    async run({ callTool }) {
+      const created = await callTool("create_tag", { name: "test-tag" });
+      if (!created.id) throw new Error("Expected created tag to have an id");
+
+      const listed = await callTool("list_tags", {});
+      if (!(listed as any[]).find((l: any) => l.id === created.id))
+        throw new Error("Created tag not found in list_tags");
+
+      const fetched = await callTool("get_tag", { tagId: created.id });
+      if (fetched.id !== created.id) throw new Error("get_tag returned wrong id");
+      if (fetched.name !== "test-tag") throw new Error(`Expected name 'test-tag', got '${fetched.name}'`);
+
+      await callTool("delete_tag", { tagId: created.id });
+
+      const after = await callTool("list_tags", {});
+      if ((after as any[]).find((l: any) => l.id === created.id))
+        throw new Error("Tag still present after delete");
+    },
+  },
+
+  {
+    name: "items: create, read, update, search, then delete",
+    async run({ callTool }) {
+      const location = await callTool("create_location", { name: "Item Test Location" });
+
+      const created = await callTool("create_item", {
+        name: "Test Item",
+        locationId: location.id,
+        description: "Created by e2e test",
+      });
+      if (!created.id) throw new Error("Expected created item to have an id");
+
+      const fetched = await callTool("get_item", { itemId: created.id });
+      if (fetched.name !== "Test Item") throw new Error(`Expected 'Test Item', got '${fetched.name}'`);
+      if (!Array.isArray(fetched.tags)) throw new Error("Expected item.tags to be an array");
+      if (fetched.labels !== undefined) throw new Error("Expected item.labels to be absent (normalized to tags)");
+
+      const tag = await callTool("create_tag", { name: "e2e-tag" });
+      if (!tag.id) throw new Error("Expected created tag to have an id");
+
+      await callTool("update_item", {
+        itemId: created.id,
+        name: "Test Item (updated)",
+        locationId: location.id,
+        description: "Updated by e2e test",
+        quantity: 2,
+        tagIds: [tag.id],
+      });
+
+      const updated = await callTool("get_item", { itemId: created.id });
+      if (updated.name !== "Test Item (updated)") throw new Error(`Expected updated name, got '${updated.name}'`);
+      if (updated.quantity !== 2) throw new Error(`Expected quantity 2, got ${updated.quantity}`);
+      if (!Array.isArray(updated.tags)) throw new Error("Expected item.tags to be an array");
+      if (updated.labels !== undefined) throw new Error("Expected item.labels to be absent (normalized to tags)");
+      if (!(updated.tags as any[]).find((t: any) => t.id === tag.id))
+        throw new Error("Tag not found on updated item");
+
+      // Partial update: only change quantity — name and tags must be preserved
+      await callTool("update_item", { itemId: created.id, quantity: 3 });
+      const partial = await callTool("get_item", { itemId: created.id });
+      if (partial.name !== "Test Item (updated)") throw new Error(`Partial update wiped name, got '${partial.name}'`);
+      if (partial.quantity !== 3) throw new Error(`Expected quantity 3, got ${partial.quantity}`);
+      if (!(partial.tags as any[]).find((t: any) => t.id === tag.id))
+        throw new Error("Partial update wiped tags");
+
+      // Purchase price: must be stored and returned as a number
+      await callTool("update_item", { itemId: created.id, purchasePrice: 49.99 });
+      const priced = await callTool("get_item", { itemId: created.id });
+      if (typeof priced.purchasePrice !== "number") throw new Error(`Expected purchasePrice to be a number, got ${typeof priced.purchasePrice}`);
+      if (priced.purchasePrice !== 49.99) throw new Error(`Expected purchasePrice 49.99, got ${priced.purchasePrice}`);
+
+      const searchResult = await callTool("search_items", { query: "updated" });
+      const items = searchResult?.items ?? searchResult ?? [];
+      const found = (items as any[]).find((i: any) => i.id === created.id);
+      if (!found) throw new Error("Updated item not found in search results");
+      if (!Array.isArray(found.tags)) throw new Error("Expected search result item.tags to be an array");
+      if (found.labels !== undefined) throw new Error("Expected search result item.labels to be absent (normalized to tags)");
+
+      // Cleanup
+      await callTool("delete_item", { itemId: created.id });
+      await callTool("delete_tag", { tagId: tag.id });
+      await callTool("delete_location", { locationId: location.id });
+
+      const after = await callTool("list_locations", {});
+      if ((after as any[]).find((l: any) => l.id === location.id))
+        throw new Error("Location still present after delete");
+    },
+  },
+
+  {
+    name: "maintenance entries: create, then delete",
+    async run({ callTool }) {
+      const location = await callTool("create_location", { name: "Maintenance Test Location" });
+      const item = await callTool("create_item", { name: "Maintenance Test Item", locationId: location.id });
+
+      const entry = await callTool("create_maintenance_entry", {
+        itemId: item.id,
+        name: "Annual service",
+        completedDate: "2026-05-08T00:00:00Z",
+        scheduledDate: "2026-05-08T00:00:00Z",
+        cost: "150.00",
+      });
+      if (!entry.id) throw new Error("Expected maintenance entry to have an id");
+
+      await callTool("delete_maintenance_entry", { entryId: entry.id });
+
+      const fetched = await callTool("get_item", { itemId: item.id });
+      const entries = fetched.maintenanceEntries ?? fetched.maintenance ?? [];
+      if ((entries as any[]).length !== 0)
+        throw new Error(`Expected 0 maintenance entries after delete, got ${(entries as any[]).length}`);
+
+      // Cleanup
+      await callTool("delete_item", { itemId: item.id });
+      await callTool("delete_location", { locationId: location.id });
+    },
+  },
+  {
+    name: "item filters: get_items_by_location, get_items_by_tag, and search_items with filters return correct items",
+    async run({ callTool }) {
+      // Seed: two locations, two tags, two items — one item per location, each tagged differently
+      const locA = await callTool("create_location", { name: "Filter Location A" });
+      const locB = await callTool("create_location", { name: "Filter Location B" });
+      const tagA = await callTool("create_tag", { name: "filter-tag-a" });
+      const tagB = await callTool("create_tag", { name: "filter-tag-b" });
+
+      const itemA = await callTool("create_item", { name: "Filter Item A", locationId: locA.id });
+      await callTool("update_item", { itemId: itemA.id, name: "Filter Item A", locationId: locA.id, tagIds: [tagA.id] });
+
+      const itemB = await callTool("create_item", { name: "Filter Item B", locationId: locB.id });
+      await callTool("update_item", { itemId: itemB.id, name: "Filter Item B", locationId: locB.id, tagIds: [tagB.id] });
+
+      // get_items_by_location: locA must return only itemA
+      const byLocA = await callTool("get_items_by_location", { locationId: locA.id });
+      if (!Array.isArray(byLocA)) throw new Error(`get_items_by_location: expected array, got ${typeof byLocA}`);
+      if (!byLocA.find((i: any) => i.id === itemA.id)) throw new Error("get_items_by_location: itemA missing from locA results");
+      if (byLocA.find((i: any) => i.id === itemB.id)) throw new Error("get_items_by_location: itemB leaked into locA results");
+
+      // get_items_by_tag: tagA must return only itemA
+      const byTagA = await callTool("get_items_by_tag", { tagId: tagA.id });
+      if (!Array.isArray(byTagA)) throw new Error(`get_items_by_tag: expected array, got ${typeof byTagA}`);
+      if (!byTagA.find((i: any) => i.id === itemA.id)) throw new Error("get_items_by_tag: itemA missing from tagA results");
+      if (byTagA.find((i: any) => i.id === itemB.id)) throw new Error("get_items_by_tag: itemB leaked into tagA results");
+
+      // search_items with locationId filter: only itemA should appear
+      const searchByLoc = await callTool("search_items", { query: "Filter", locationId: locA.id });
+      const searchByLocItems: any[] = searchByLoc?.items ?? searchByLoc ?? [];
+      if (!Array.isArray(searchByLocItems)) throw new Error(`search_items+locationId: expected array, got ${typeof searchByLocItems}`);
+      if (!searchByLocItems.find((i: any) => i.id === itemA.id)) throw new Error("search_items+locationId: itemA missing");
+      if (searchByLocItems.find((i: any) => i.id === itemB.id)) throw new Error("search_items+locationId: itemB leaked in");
+
+      // search_items with tagId filter: only itemB should appear
+      const searchByTag = await callTool("search_items", { query: "Filter", tagId: tagB.id });
+      const searchByTagItems: any[] = searchByTag?.items ?? searchByTag ?? [];
+      if (!Array.isArray(searchByTagItems)) throw new Error(`search_items+tagId: expected array, got ${typeof searchByTagItems}`);
+      if (!searchByTagItems.find((i: any) => i.id === itemB.id)) throw new Error("search_items+tagId: itemB missing");
+      if (searchByTagItems.find((i: any) => i.id === itemA.id)) throw new Error("search_items+tagId: itemA leaked in");
+
+      // search_items with both locationId and tagId: only itemA (locA + tagA) should appear
+      const searchBoth = await callTool("search_items", { query: "Filter", locationId: locA.id, tagId: tagA.id });
+      const searchBothItems: any[] = searchBoth?.items ?? searchBoth ?? [];
+      if (!Array.isArray(searchBothItems)) throw new Error(`search_items+both: expected array, got ${typeof searchBothItems}`);
+      if (!searchBothItems.find((i: any) => i.id === itemA.id)) throw new Error("search_items+both: itemA missing");
+      if (searchBothItems.find((i: any) => i.id === itemB.id)) throw new Error("search_items+both: itemB leaked in");
+
+      // Cleanup
+      await callTool("delete_item", { itemId: itemA.id });
+      await callTool("delete_item", { itemId: itemB.id });
+      await callTool("delete_tag", { tagId: tagA.id });
+      await callTool("delete_tag", { tagId: tagB.id });
+      await callTool("delete_location", { locationId: locA.id });
+      await callTool("delete_location", { locationId: locB.id });
+    },
+  },
+
+  {
+    name: "update_location: rename and re-describe a location",
+    async run({ callTool }) {
+      const created = await callTool("create_location", { name: "Location Before", description: "original" });
+
+      const updated = await callTool("update_location", {
+        locationId: created.id,
+        name: "Location After",
+        description: "updated description",
+      });
+      if (updated.name !== "Location After")
+        throw new Error(`Expected updated name, got '${updated.name}'`);
+      if (updated.description !== "updated description")
+        throw new Error(`Expected updated description, got '${updated.description}'`);
+
+      // Verify via get_location
+      const fetched = await callTool("get_location", { locationId: created.id });
+      if (fetched.name !== "Location After")
+        throw new Error(`get_location: expected 'Location After', got '${fetched.name}'`);
+
+      await callTool("delete_location", { locationId: created.id });
+    },
+  },
+
+  {
+    name: "update_tag: rename, re-describe, and set color",
+    async run({ callTool }) {
+      const created = await callTool("create_tag", { name: "Tag Before" });
+
+      const updated = await callTool("update_tag", {
+        tagId: created.id,
+        name: "Tag After",
+        description: "updated tag description",
+        color: "#ff0000",
+      });
+      if (updated.name !== "Tag After")
+        throw new Error(`Expected updated name, got '${updated.name}'`);
+      if (updated.description !== "updated tag description")
+        throw new Error(`Expected updated description, got '${updated.description}'`);
+      if (updated.color !== "#ff0000")
+        throw new Error(`Expected color '#ff0000', got '${updated.color}'`);
+
+      // Verify via get_tag
+      const fetched = await callTool("get_tag", { tagId: created.id });
+      if (fetched.name !== "Tag After")
+        throw new Error(`get_tag: expected 'Tag After', got '${fetched.name}'`);
+
+      await callTool("delete_tag", { tagId: created.id });
+    },
+  },
+
+  {
+    name: "update_maintenance_entry: change name, description, and cost",
+    async run({ callTool }) {
+      const location = await callTool("create_location", { name: "Maint Update Test Location" });
+      const item = await callTool("create_item", { name: "Maint Update Test Item", locationId: location.id });
+
+      const entry = await callTool("create_maintenance_entry", {
+        itemId: item.id,
+        name: "Original service",
+        completedDate: "2026-05-01T00:00:00Z",
+        scheduledDate: "2026-05-01T00:00:00Z",
+        cost: "50.00",
+      });
+
+      const updated = await callTool("update_maintenance_entry", {
+        entryId: entry.id,
+        name: "Updated service",
+        completedDate: "2026-05-01T00:00:00Z",
+        scheduledDate: "2026-05-01T00:00:00Z",
+        description: "Added notes after the fact",
+        cost: "75.00",
+      });
+      if (updated.name !== "Updated service")
+        throw new Error(`Expected updated name, got '${updated.name}'`);
+      if (parseFloat(updated.cost) !== 75)
+        throw new Error(`Expected cost 75, got '${updated.cost}'`);
+
+      // Cleanup
+      await callTool("delete_maintenance_entry", { entryId: entry.id });
+      await callTool("delete_item", { itemId: item.id });
+      await callTool("delete_location", { locationId: location.id });
+    },
+  },
+];
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  stackUp();
+
+  let httpClient!: AxiosInstance;
+  try {
+    console.log("\n⏳ Waiting for Homebox to be ready...");
+    httpClient = await waitForHomebox();
+    console.log("  ✅ Homebox is healthy");
+
+    console.log("\n👤 Setting up test user...");
+    await registerTestUser(httpClient);
+  } catch (error: any) {
+    console.error("\n❌ Stack setup failed:", error.message);
+    stackDown();
+    process.exit(1);
+  }
+
+  console.log(`\n🧪 Running ${TEST_CASES.length} test case(s)...\n`);
+
+  for (const tc of TEST_CASES) {
+    const ok = await runTestCase(tc);
+    if (!ok) {
+      // Verify state is still clean enough to continue; if not, recreate
+      try {
+        const verifyClient = new McpClient();
+        await verifyClient.initialize();
+        const locations = await verifyClient.callTool("list_locations", {});
+        await verifyClient.close();
+        if (Array.isArray(locations) && locations.length > 0) {
+          stackRecreate();
+          httpClient = await waitForHomebox();
+          await registerTestUser(httpClient);
+          console.log("  ✅ Stack recreated — continuing with remaining tests\n");
+        }
+      } catch {
+        stackRecreate();
+        httpClient = await waitForHomebox();
+        await registerTestUser(httpClient);
+      }
+    }
+  }
+
+  stackDown();
+
+  console.log(`\n${"=".repeat(40)}`);
+  console.log(`Results: ${passed} passed, ${failed} failed`);
+  console.log("=".repeat(40));
+
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+main().catch((error) => {
+  console.error("\nFatal error:", error.message);
+  stackDown();
+  process.exit(1);
+});

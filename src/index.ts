@@ -34,6 +34,11 @@ class HomeboxClient {
   private axios: AxiosInstance;
   private config: HomeboxConfig;
   private authToken: string | null = null;
+  // Homebox renamed /api/v1/labels to /api/v1/tags in v0.23.0, and the
+  // corresponding item filter param from `labels` to `tags` at the same time.
+  // Both are detected at startup via /api/v1/status and set in authenticate().
+  private tagEndpoint: string = "/api/v1/tags";
+  private tagFilterParam: string = "tags";
 
   constructor(config: HomeboxConfig) {
     this.config = config;
@@ -41,6 +46,17 @@ class HomeboxClient {
       baseURL: config.homeboxUrl,
       headers: {
         "Content-Type": "application/json",
+      },
+      // Homebox expects repeated keys for array params (e.g. locations=a&locations=b),
+      // not the axios default bracket notation (locations[0]=a).
+      paramsSerializer: (params) => {
+        const parts: string[] = [];
+        for (const [key, value] of Object.entries(params)) {
+          if (value === undefined || value === null) continue;
+          const values = Array.isArray(value) ? value : [value];
+          for (const v of values) parts.push(`${key}=${encodeURIComponent(v)}`);
+        }
+        return parts.join("&");
       },
     });
   }
@@ -53,23 +69,46 @@ class HomeboxClient {
       });
 
       if (response.data && response.data.token) {
-        this.authToken = response.data.token;
-        this.axios.defaults.headers.common["Authorization"] = `Bearer ${this.authToken}`;
+        const token: string = response.data.token;
+        this.authToken = token;
+        const authHeader = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+        this.axios.defaults.headers.common["Authorization"] = authHeader;
       } else {
         throw new Error("Authentication failed: No token received");
       }
     } catch (error: any) {
       throw new Error(`Authentication failed: ${error.message}`);
     }
+
+    try {
+      const status = await this.axios.get("/api/v1/status");
+      const version: string = status.data?.build?.version ?? "v0.0.0";
+      // Strip leading "v" and compare numerically
+      const [major, minor] = version.replace(/^v/, "").split(".").map(Number);
+      // Tags endpoint introduced in v0.23.0
+      if (major === 0 && minor < 23) {
+        this.tagEndpoint = "/api/v1/labels";
+        this.tagFilterParam = "labels";
+      }
+      console.error(`Homebox version: ${version} — using tag endpoint: ${this.tagEndpoint}, filter param: ${this.tagFilterParam}`);
+    } catch {
+      console.error(`Could not detect Homebox version, defaulting to ${this.tagEndpoint}`);
+    }
   }
 
-  async searchItems(query: string): Promise<any> {
+  async searchItems(query: string, locationId?: string, tagId?: string): Promise<any> {
     await this.ensureAuthenticated();
     try {
       const response = await this.axios.get("/api/v1/items", {
-        params: { q: query },
+        params: {
+          q: query,
+          ...(locationId ? { locations: [locationId] } : {}),
+          ...(tagId ? { [this.tagFilterParam]: [tagId] } : {}),
+        },
       });
-      return response.data;
+      const data = response.data;
+      if (data?.items) data.items = data.items.map((i: any) => this.normalizeItem(i));
+      return data;
     } catch (error: any) {
       throw new Error(`Failed to search items: ${error.message}`);
     }
@@ -79,7 +118,7 @@ class HomeboxClient {
     await this.ensureAuthenticated();
     try {
       const response = await this.axios.get(`/api/v1/items/${itemId}`);
-      return response.data;
+      return this.normalizeItem(response.data);
     } catch (error: any) {
       throw new Error(`Failed to get item: ${error.message}`);
     }
@@ -105,44 +144,230 @@ class HomeboxClient {
     }
   }
 
-  async listLabels(): Promise<any> {
+  async listTags(): Promise<any> {
     await this.ensureAuthenticated();
     try {
-      const response = await this.axios.get("/api/v1/labels");
+      const response = await this.axios.get(this.tagEndpoint);
       return response.data;
     } catch (error: any) {
-      throw new Error(`Failed to list labels: ${error.message}`);
+      throw new Error(`Failed to list tags: ${error.message}`);
     }
   }
 
-  async getLabel(labelId: string): Promise<any> {
+  async getTag(tagId: string): Promise<any> {
     await this.ensureAuthenticated();
     try {
-      const response = await this.axios.get(`/api/v1/labels/${labelId}`);
+      const response = await this.axios.get(`${this.tagEndpoint}/${tagId}`);
       return response.data;
     } catch (error: any) {
-      throw new Error(`Failed to get label: ${error.message}`);
+      throw new Error(`Failed to get tag: ${error.message}`);
     }
   }
 
   async getItemsByLocation(locationId: string): Promise<any> {
     await this.ensureAuthenticated();
     try {
-      const response = await this.axios.get(`/api/v1/locations/${locationId}/items`);
-      return response.data;
+      const response = await this.axios.get("/api/v1/items", { params: { locations: [locationId] } });
+      return (response.data?.items ?? []).map((i: any) => this.normalizeItem(i));
     } catch (error: any) {
       throw new Error(`Failed to get items by location: ${error.message}`);
     }
   }
 
-  async getItemsByLabel(labelId: string): Promise<any> {
+  async getItemsByTag(tagId: string): Promise<any> {
     await this.ensureAuthenticated();
     try {
-      const response = await this.axios.get(`/api/v1/labels/${labelId}/items`);
+      const response = await this.axios.get("/api/v1/items", { params: { [this.tagFilterParam]: [tagId] } });
+      return (response.data?.items ?? []).map((i: any) => this.normalizeItem(i));
+    } catch (error: any) {
+      throw new Error(`Failed to get items by tag: ${error.message}`);
+    }
+  }
+
+  async createLocation(name: string, description?: string): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      const response = await this.axios.post("/api/v1/locations", { name, description });
       return response.data;
     } catch (error: any) {
-      throw new Error(`Failed to get items by label: ${error.message}`);
+      throw new Error(`Failed to create location: ${error.message}`);
     }
+  }
+
+  async deleteMaintenanceEntry(entryId: string): Promise<void> {
+    await this.ensureAuthenticated();
+    try {
+      await this.axios.delete(`/api/v1/maintenance/${entryId}`);
+    } catch (error: any) {
+      throw new Error(`Failed to delete maintenance entry: ${error.message}`);
+    }
+  }
+
+  async createMaintenanceEntry(
+    itemId: string,
+    name: string,
+    completedDate?: string,
+    scheduledDate?: string,
+    description?: string,
+    cost?: string
+  ): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      const response = await this.axios.post(`/api/v1/items/${itemId}/maintenance`, {
+        name,
+        completedDate,
+        scheduledDate,
+        description,
+        cost,
+      });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(`Failed to create maintenance entry: ${error.message}`);
+    }
+  }
+
+  async updateItem(itemId: string, patch: Record<string, any>): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      // Fetch current state so we can implement PATCH semantics over Homebox's PUT API.
+      const currentResponse = await this.axios.get(`/api/v1/items/${itemId}`);
+      const current = currentResponse.data;
+
+      // The GET response uses nested objects for location/tags, but PUT expects flat IDs.
+      // Flatten those fields from current, then spread current + patch on top.
+      // Fields absent from patch are preserved from current; null explicitly clears.
+      const tagKey = this.tagFilterParam === "labels" ? "labelIds" : "tagIds";
+      // Start from current item state, flattening nested objects to the IDs that PUT expects.
+      const base: Record<string, any> = {
+        ...current,
+        locationId: current.location?.id,
+        [tagKey]: (current.labels ?? current.tags ?? []).map((t: any) => t.id),
+        parentId: current.parent?.id,
+      };
+      // Apply patch fields, remapping tagIds to the version-appropriate key if needed.
+      const { tagIds, ...restPatch } = patch;
+      // Homebox PUT requires these as numbers; coerce in case the base state has them as strings.
+      if (restPatch.purchasePrice !== undefined) restPatch.purchasePrice = Number(restPatch.purchasePrice);
+      if (restPatch.soldPrice !== undefined) restPatch.soldPrice = Number(restPatch.soldPrice);
+      const body: Record<string, any> = {
+        ...base,
+        ...restPatch,
+        ...(tagIds !== undefined && { [tagKey]: tagIds }),
+      };
+
+      const response = await this.axios.put(`/api/v1/items/${itemId}`, body);
+      return this.normalizeItem(response.data);
+    } catch (error: any) {
+      throw new Error(`Failed to update item: ${error.message}`);
+    }
+  }
+
+  async createItem(
+    name: string,
+    locationId: string,
+    description?: string,
+    tagIds?: string[],
+    parentId?: string
+  ): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      const response = await this.axios.post("/api/v1/items", {
+        name,
+        locationId,
+        description,
+        labelIds: tagIds,
+        parentId,
+      });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(`Failed to create item: ${error.message}`);
+    }
+  }
+
+  async createTag(name: string, description?: string): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      const response = await this.axios.post(this.tagEndpoint, { name, description });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(`Failed to create tag: ${error.message}`);
+    }
+  }
+
+  async deleteItem(itemId: string): Promise<void> {
+    await this.ensureAuthenticated();
+    try {
+      await this.axios.delete(`/api/v1/items/${itemId}`);
+    } catch (error: any) {
+      throw new Error(`Failed to delete item: ${error.message}`);
+    }
+  }
+
+  async deleteLocation(locationId: string): Promise<void> {
+    await this.ensureAuthenticated();
+    try {
+      await this.axios.delete(`/api/v1/locations/${locationId}`);
+    } catch (error: any) {
+      throw new Error(`Failed to delete location: ${error.message}`);
+    }
+  }
+
+  async deleteTag(tagId: string): Promise<void> {
+    await this.ensureAuthenticated();
+    try {
+      await this.axios.delete(`${this.tagEndpoint}/${tagId}`);
+    } catch (error: any) {
+      throw new Error(`Failed to delete tag: ${error.message}`);
+    }
+  }
+
+  async updateLocation(locationId: string, name: string, description?: string, parentId?: string): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      const response = await this.axios.put(`/api/v1/locations/${locationId}`, { id: locationId, name, description, parentId });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(`Failed to update location: ${error.message}`);
+    }
+  }
+
+  async updateTag(tagId: string, name: string, description?: string, color?: string, icon?: string, parentId?: string): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      const response = await this.axios.put(`${this.tagEndpoint}/${tagId}`, { id: tagId, name, description, color, icon, parentId });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(`Failed to update tag: ${error.message}`);
+    }
+  }
+
+  async updateMaintenanceEntry(
+    entryId: string,
+    name: string,
+    completedDate?: string,
+    scheduledDate?: string,
+    description?: string,
+    cost?: string
+  ): Promise<any> {
+    await this.ensureAuthenticated();
+    try {
+      const response = await this.axios.put(`/api/v1/maintenance/${entryId}`, {
+        name, completedDate, scheduledDate, description, cost,
+      });
+      return response.data;
+    } catch (error: any) {
+      throw new Error(`Failed to update maintenance entry: ${error.message}`);
+    }
+  }
+
+  // Homebox < v0.23.0 returns item.labels; v0.23.0+ returns item.tags.
+  // Normalize to always expose item.tags so callers see a consistent shape.
+  private normalizeItem(item: any): any {
+    if (item && item.labels !== undefined && item.tags === undefined) {
+      const { labels, ...rest } = item;
+      return { ...rest, tags: labels };
+    }
+    return item;
   }
 
   private async ensureAuthenticated(): Promise<void> {
@@ -204,7 +429,7 @@ function loadConfig(): HomeboxConfig {
 const TOOLS: Tool[] = [
   {
     name: "search_items",
-    description: "Search for items in your Homebox inventory by name, description, or other fields. Returns a list of matching items with their basic information.",
+    description: "Search for items in your Homebox inventory by name, description, or other fields. Optionally filter by location or tag. Returns a list of matching items with their basic information.",
     inputSchema: {
       type: "object",
       properties: {
@@ -212,13 +437,21 @@ const TOOLS: Tool[] = [
           type: "string",
           description: "Search query to find items",
         },
+        locationId: {
+          type: "string",
+          description: "Optional: filter results to items in this location ID",
+        },
+        tagId: {
+          type: "string",
+          description: "Optional: filter results to items with this tag ID",
+        },
       },
       required: ["query"],
     },
   },
   {
     name: "get_item",
-    description: "Get detailed information about a specific item by its ID. Returns complete item details including name, description, location, labels, purchase info, warranty info, and more.",
+    description: "Get detailed information about a specific item by its ID. Returns complete item details including name, description, location, tags, purchase info, warranty info, and more.",
     inputSchema: {
       type: "object",
       properties: {
@@ -232,7 +465,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "list_locations",
-    description: "List all locations in your Homebox inventory. Locations are where items are stored (e.g., 'Kitchen', 'Garage', 'Living Room'). Returns location names, IDs, and descriptions.",
+    description: "List all locations in your Homebox inventory. Locations are where items are stored (e.g., 'Office', 'Warehouse', 'Storage Room'). Returns location names, IDs, and descriptions.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -253,30 +486,30 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "list_labels",
-    description: "List all labels in your Homebox inventory. Labels are used to categorize items (e.g., 'Electronics', 'Important', 'Fragile'). Returns label names, IDs, and descriptions.",
+    name: "list_tags",
+    description: "List all tags in your Homebox inventory. Tags are used to categorize items (e.g., 'Electronics', 'Important', 'Fragile'). Returns tag names, IDs, and descriptions.",
     inputSchema: {
       type: "object",
       properties: {},
     },
   },
   {
-    name: "get_label",
-    description: "Get detailed information about a specific label by its ID, including its name, description, and color.",
+    name: "get_tag",
+    description: "Get detailed information about a specific tag by its ID, including its name, description, and color.",
     inputSchema: {
       type: "object",
       properties: {
-        labelId: {
+        tagId: {
           type: "string",
-          description: "The ID of the label to retrieve",
+          description: "The ID of the tag to retrieve",
         },
       },
-      required: ["labelId"],
+      required: ["tagId"],
     },
   },
   {
     name: "get_items_by_location",
-    description: "Get all items stored in a specific location. Useful for finding everything in a particular room or storage area.",
+    description: "Get all items stored in a specific location. Useful for finding everything in a particular location or storage area.",
     inputSchema: {
       type: "object",
       properties: {
@@ -289,17 +522,390 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "get_items_by_label",
-    description: "Get all items that have a specific label. Useful for finding all items in a category (e.g., all electronics, all important items).",
+    name: "get_items_by_tag",
+    description: "Get all items that have a specific tag. Useful for finding all items in a category (e.g., all electronics, all important items).",
     inputSchema: {
       type: "object",
       properties: {
-        labelId: {
+        tagId: {
           type: "string",
-          description: "The ID of the label",
+          description: "The ID of the tag",
         },
       },
-      required: ["labelId"],
+      required: ["tagId"],
+    },
+  },
+  {
+    name: "delete_maintenance_entry",
+    description: "Delete a maintenance entry by its ID. Note: use the top-level maintenance entry ID, not the item ID. The entry is permanently removed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entryId: {
+          type: "string",
+          description: "ID of the maintenance entry to delete",
+        },
+      },
+      required: ["entryId"],
+    },
+  },
+  {
+    name: "create_maintenance_entry",
+    description: "Record a maintenance event on an item. At least one of completedDate or scheduledDate must be provided (the API returns 500 otherwise). For completed work, set both to the same date. Cost must be a string, not a number (e.g. \"85.00\").",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: {
+          type: "string",
+          description: "ID of the item this maintenance entry belongs to",
+        },
+        name: {
+          type: "string",
+          description: "Name of the maintenance task (e.g. 'Annual service', 'Battery replacement')",
+        },
+        completedDate: {
+          type: "string",
+          description: "Date the work was completed, in ISO 8601 format with time component (e.g. 2026-05-01T00:00:00Z)",
+        },
+        scheduledDate: {
+          type: "string",
+          description: "Date the work is scheduled for, in ISO 8601 format with time component (e.g. 2026-06-01T00:00:00Z)",
+        },
+        description: {
+          type: "string",
+          description: "Notes about the work performed, findings, or next steps",
+        },
+        cost: {
+          type: "string",
+          description: "Cost of the service as a numeric string (e.g. \"85.00\")",
+        },
+      },
+      required: ["itemId", "name"],
+    },
+  },
+  {
+    name: "update_item",
+    description: "Partially update an item by ID. Only include fields you want to change — omitted fields are left as-is. Pass null to explicitly clear a field.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: {
+          type: "string",
+          description: "ID of the item to update",
+        },
+        name: {
+          type: "string",
+          description: "Name of the item",
+        },
+        description: {
+          type: "string",
+          description: "Description of the item: model details, specs, notable characteristics (max 1000 characters).",
+        },
+        quantity: {
+          type: "integer",
+          description: "Number of units",
+        },
+        locationId: {
+          type: "string",
+          description: "ID of the location where the item is stored",
+        },
+        tagIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of tag IDs to attach to the item (replaces existing tags)",
+        },
+        parentId: {
+          type: "string",
+          description: "ID of a parent item, if this item is a sub-item",
+        },
+        assetId: {
+          type: "string",
+          description: "Asset tracking number",
+        },
+        archived: {
+          type: "boolean",
+          description: "Whether the item is archived",
+        },
+        insured: {
+          type: "boolean",
+          description: "Whether the item is insured",
+        },
+        serialNumber: {
+          type: "string",
+          description: "Serial number of the item",
+        },
+        modelNumber: {
+          type: "string",
+          description: "Model number of the item",
+        },
+        manufacturer: {
+          type: "string",
+          description: "Manufacturer or brand",
+        },
+        purchaseTime: {
+          type: "string",
+          description: "Date of purchase in ISO 8601 format with time component (e.g. 2025-08-28T00:00:00Z)",
+        },
+        purchaseFrom: {
+          type: "string",
+          description: "Vendor or store where the item was purchased",
+        },
+        purchasePrice: {
+          type: "number",
+          description: "Original purchase price (numeric, no currency symbol)",
+        },
+        lifetimeWarranty: {
+          type: "boolean",
+          description: "Whether the item has a lifetime warranty",
+        },
+        warrantyExpires: {
+          type: "string",
+          description: "Warranty expiration date in ISO 8601 format with time component (e.g. 2028-08-28T00:00:00Z)",
+        },
+        warrantyDetails: {
+          type: "string",
+          description: "Free-text warranty description (e.g. 'Parts: 3 years. Labor: 1 year.')",
+        },
+        soldTime: {
+          type: "string",
+          description: "Date the item was sold or retired, in ISO 8601 format with time component",
+        },
+        soldTo: {
+          type: "string",
+          description: "Name of the buyer, or empty string if retired without a sale",
+        },
+        soldPrice: {
+          type: "number",
+          description: "Sale price (numeric), or 0 if retired without a sale",
+        },
+        soldNotes: {
+          type: "string",
+          description: "Notes about the sale or retirement (e.g. why retired, what replaced it)",
+        },
+        notes: {
+          type: "string",
+          description: "Additional structured properties that don't fit a native field (e.g. color, voltage, compatible accessories). Max 1000 characters.",
+        },
+        fields: {
+          type: "array",
+          description: "Custom fields. Each field has a name, type ('text', 'number', 'boolean', 'date'), and a corresponding value key (textValue, numberValue, booleanValue, timeValue).",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              type: { type: "string" },
+              textValue: { type: "string" },
+              numberValue: { type: "number" },
+              booleanValue: { type: "boolean" },
+              timeValue: { type: "string" },
+            },
+          },
+        },
+      },
+      required: ["itemId"],
+    },
+  },
+  {
+    name: "create_item",
+    description: "Create a new item in Homebox. Only a subset of fields can be set on creation (name, locationId, description, tagIds, parentId). Use update_item afterward to set warranty, purchase info, serial number, custom fields, and other metadata. Returns the created item including its new ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Name of the item",
+        },
+        locationId: {
+          type: "string",
+          description: "ID of the location where the item is stored",
+        },
+        description: {
+          type: "string",
+          description: "Description of the item (max 1000 characters)",
+        },
+        tagIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of tag IDs to attach to the item",
+        },
+        parentId: {
+          type: "string",
+          description: "ID of a parent item, if this item is a sub-item",
+        },
+      },
+      required: ["name", "locationId"],
+    },
+  },
+  {
+    name: "create_tag",
+    description: "Create a new tag in Homebox. Tags are used to categorize items across locations (e.g., 'Electronics', 'Fragile', 'High Value'). Returns the created tag including its new ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Name of the tag",
+        },
+        description: {
+          type: "string",
+          description: "Optional description of the tag",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "create_location",
+    description: "Create a new location in Homebox. Locations are physical places where items are stored (e.g., 'Office', 'Storage Room'). Returns the created location including its new ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Name of the location",
+        },
+        description: {
+          type: "string",
+          description: "Optional description of the location",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "delete_item",
+    description: "Permanently delete an item by ID. This cannot be undone.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        itemId: {
+          type: "string",
+          description: "ID of the item to delete",
+        },
+      },
+      required: ["itemId"],
+    },
+  },
+  {
+    name: "delete_location",
+    description: "Permanently delete a location by ID. Do not delete a location that still contains items — deletion cascades and removes all items in it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        locationId: {
+          type: "string",
+          description: "ID of the location to delete",
+        },
+      },
+      required: ["locationId"],
+    },
+  },
+  {
+    name: "delete_tag",
+    description: "Permanently delete a tag by ID. Items that had this tag will have it removed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tagId: {
+          type: "string",
+          description: "ID of the tag to delete",
+        },
+      },
+      required: ["tagId"],
+    },
+  },
+  {
+    name: "update_location",
+    description: "Update an existing location's name, description, or parent location.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        locationId: {
+          type: "string",
+          description: "ID of the location to update",
+        },
+        name: {
+          type: "string",
+          description: "New name for the location",
+        },
+        description: {
+          type: "string",
+          description: "New description for the location",
+        },
+        parentId: {
+          type: "string",
+          description: "ID of a parent location to nest this location under, or omit to make it top-level",
+        },
+      },
+      required: ["locationId", "name"],
+    },
+  },
+  {
+    name: "update_tag",
+    description: "Update an existing tag's name, description, color, icon, or parent tag.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tagId: {
+          type: "string",
+          description: "ID of the tag to update",
+        },
+        name: {
+          type: "string",
+          description: "New name for the tag",
+        },
+        description: {
+          type: "string",
+          description: "New description for the tag",
+        },
+        color: {
+          type: "string",
+          description: "Hex color code for the tag (e.g. '#ff0000')",
+        },
+        icon: {
+          type: "string",
+          description: "Icon identifier for the tag",
+        },
+        parentId: {
+          type: "string",
+          description: "ID of a parent tag to nest this tag under, or omit to make it top-level",
+        },
+      },
+      required: ["tagId", "name"],
+    },
+  },
+  {
+    name: "update_maintenance_entry",
+    description: "Update an existing maintenance entry on an item. At least one of completedDate or scheduledDate must be provided. Cost must be a numeric string (e.g. \"85.00\").",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entryId: {
+          type: "string",
+          description: "ID of the maintenance entry to update",
+        },
+        name: {
+          type: "string",
+          description: "Name of the maintenance task",
+        },
+        completedDate: {
+          type: "string",
+          description: "Date the work was completed, in ISO 8601 format with time component (e.g. 2026-05-01T00:00:00Z)",
+        },
+        scheduledDate: {
+          type: "string",
+          description: "Date the work is scheduled for, in ISO 8601 format with time component (e.g. 2026-06-01T00:00:00Z)",
+        },
+        description: {
+          type: "string",
+          description: "Notes about the work performed, findings, or next steps",
+        },
+        cost: {
+          type: "string",
+          description: "Cost of the service as a numeric string (e.g. \"85.00\")",
+        },
+      },
+      required: ["entryId", "name"],
     },
   },
 ];
@@ -365,7 +971,11 @@ async function main() {
 
         switch (name) {
         case "search_items": {
-          const result = await homeboxClient.searchItems(args.query as string);
+          const result = await homeboxClient.searchItems(
+            args.query as string,
+            args.locationId as string | undefined,
+            args.tagId as string | undefined,
+          );
           return {
             content: [
               {
@@ -412,8 +1022,8 @@ async function main() {
           };
         }
 
-        case "list_labels": {
-          const result = await homeboxClient.listLabels();
+        case "list_tags": {
+          const result = await homeboxClient.listTags();
           return {
             content: [
               {
@@ -424,8 +1034,8 @@ async function main() {
           };
         }
 
-        case "get_label": {
-          const result = await homeboxClient.getLabel(args.labelId as string);
+        case "get_tag": {
+          const result = await homeboxClient.getTag(args.tagId as string);
           return {
             content: [
               {
@@ -448,8 +1058,8 @@ async function main() {
           };
         }
 
-        case "get_items_by_label": {
-          const result = await homeboxClient.getItemsByLabel(args.labelId as string);
+        case "get_items_by_tag": {
+          const result = await homeboxClient.getItemsByTag(args.tagId as string);
           return {
             content: [
               {
@@ -457,6 +1067,159 @@ async function main() {
                 text: JSON.stringify(result, null, 2),
               },
             ],
+          };
+        }
+
+        case "delete_maintenance_entry": {
+          await homeboxClient.deleteMaintenanceEntry(args.entryId as string);
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Maintenance entry deleted successfully.",
+              },
+            ],
+          };
+        }
+
+        case "create_maintenance_entry": {
+          const result = await homeboxClient.createMaintenanceEntry(
+            args.itemId as string,
+            args.name as string,
+            args.completedDate as string | undefined,
+            args.scheduledDate as string | undefined,
+            args.description as string | undefined,
+            args.cost as string | undefined
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case "update_item": {
+          const { itemId, ...data } = args as { itemId: string; [key: string]: any };
+          const result = await homeboxClient.updateItem(itemId, data);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case "create_item": {
+          const result = await homeboxClient.createItem(
+            args.name as string,
+            args.locationId as string,
+            args.description as string | undefined,
+            args.tagIds as string[] | undefined,
+            args.parentId as string | undefined
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case "create_tag": {
+          const result = await homeboxClient.createTag(
+            args.name as string,
+            args.description as string | undefined
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case "create_location": {
+          const result = await homeboxClient.createLocation(
+            args.name as string,
+            args.description as string | undefined
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case "delete_item": {
+          await homeboxClient.deleteItem(args.itemId as string);
+          return {
+            content: [{ type: "text", text: "Item deleted successfully." }],
+          };
+        }
+
+        case "delete_location": {
+          await homeboxClient.deleteLocation(args.locationId as string);
+          return {
+            content: [{ type: "text", text: "Location deleted successfully." }],
+          };
+        }
+
+        case "delete_tag": {
+          await homeboxClient.deleteTag(args.tagId as string);
+          return {
+            content: [{ type: "text", text: "Tag deleted successfully." }],
+          };
+        }
+
+        case "update_location": {
+          const result = await homeboxClient.updateLocation(
+            args.locationId as string,
+            args.name as string,
+            args.description as string | undefined,
+            args.parentId as string | undefined
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          };
+        }
+
+        case "update_tag": {
+          const result = await homeboxClient.updateTag(
+            args.tagId as string,
+            args.name as string,
+            args.description as string | undefined,
+            args.color as string | undefined,
+            args.icon as string | undefined,
+            args.parentId as string | undefined
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          };
+        }
+
+        case "update_maintenance_entry": {
+          const result = await homeboxClient.updateMaintenanceEntry(
+            args.entryId as string,
+            args.name as string,
+            args.completedDate as string | undefined,
+            args.scheduledDate as string | undefined,
+            args.description as string | undefined,
+            args.cost as string | undefined
+          );
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
           };
         }
 

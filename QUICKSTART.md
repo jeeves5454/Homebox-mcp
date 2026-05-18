@@ -25,16 +25,19 @@ Node.js is the software that will run this MCP server.
 You need to open a command line terminal:
 
 **On Windows:**
+
 - Press the Windows key
 - Type "cmd" or "Command Prompt"
 - Press Enter
 
 **On Mac:**
+
 - Press Command + Space
 - Type "terminal"
 - Press Enter
 
 **On Linux:**
+
 - Press Ctrl + Alt + T
 
 ### Step 3: Navigate to the MCP Server Folder
@@ -42,15 +45,19 @@ You need to open a command line terminal:
 In the terminal, type:
 
 **On Windows:**
+
 ```
 cd C:\path\to\Homebox-mcp
 ```
+
 (Replace `C:\path\to\Homebox-mcp` with where you downloaded this folder)
 
 **On Mac/Linux:**
+
 ```
 cd /path/to/Homebox-mcp
 ```
+
 (Replace `/path/to/Homebox-mcp` with where you downloaded this folder)
 
 Press Enter.
@@ -58,11 +65,13 @@ Press Enter.
 ### Step 4: Run the Setup Script
 
 **On Windows:**
+
 ```
 setup.bat
 ```
 
 **On Mac/Linux:**
+
 ```
 ./setup.sh
 ```
@@ -79,6 +88,7 @@ You need to tell the server how to connect to your Homebox:
    - **Linux**: Use any text editor like `gedit` or `nano`
 
 2. You'll see something like this:
+
    ```json
    {
      "homeboxUrl": "http://localhost:7745",
@@ -97,11 +107,13 @@ You need to tell the server how to connect to your Homebox:
 ### Step 6: Test the Connection
 
 In your terminal, type:
+
 ```
 npm start
 ```
 
 If everything works, you should see:
+
 ```
 Starting Homebox MCP Server...
 Successfully authenticated with Homebox
@@ -123,6 +135,7 @@ The Claude Desktop configuration file is located at:
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 **Tip for Windows:** To get to AppData folder:
+
 1. Press Windows + R
 2. Type `%APPDATA%`
 3. Press Enter
@@ -133,6 +146,7 @@ The Claude Desktop configuration file is located at:
 You need the complete path to the `dist/index.js` file inside your Homebox-mcp folder.
 
 **On Windows:**
+
 - Open File Explorer
 - Navigate to your Homebox-mcp folder
 - Open the `dist` folder
@@ -142,6 +156,7 @@ You need the complete path to the `dist/index.js` file inside your Homebox-mcp f
 - Add `\index.js` to the end
 
 **On Mac/Linux:**
+
 - Open Terminal
 - Navigate to your Homebox-mcp folder
 - Type: `pwd`
@@ -155,6 +170,7 @@ You need the complete path to the `dist/index.js` file inside your Homebox-mcp f
 2. If the file is empty or has just `{}`, replace everything with:
 
    **Windows example:**
+
    ```json
    {
      "mcpServers": {
@@ -167,6 +183,7 @@ You need the complete path to the `dist/index.js` file inside your Homebox-mcp f
    ```
 
    **Mac/Linux example:**
+
    ```json
    {
      "mcpServers": {
@@ -204,6 +221,7 @@ Claude should now be able to access your Homebox data!
 ### "I can't find the config file"
 
 On Windows, the AppData folder is hidden by default:
+
 1. Open File Explorer
 2. Click the "View" tab
 3. Check "Hidden items"

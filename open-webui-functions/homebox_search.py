@@ -211,11 +211,14 @@ class Tools:
         __event_emitter__=None
     ) -> str:
         """
-        Get all items that have a specific label/tag.
+        Get all items that have a specific tag.
         Use this to find items by category or type.
 
-        :param label_name: Name of the label (e.g., "Alcohol", "Spirits", "Tools")
-        :return: List of items with that label
+        Note: this function is named 'get_items_by_label' for backwards compatibility.
+        Homebox renamed labels to tags in v0.23.0.
+
+        :param label_name: Name of the tag (e.g., "Alcohol", "Spirits", "Tools")
+        :return: List of items with that tag
         """
         try:
             # First, get all labels to find the ID
@@ -272,10 +275,13 @@ class Tools:
         __event_emitter__=None
     ) -> str:
         """
-        List all labels/tags in Homebox.
+        List all tags in Homebox.
         Use this to see what categories or types are available.
 
-        :return: List of all labels
+        Note: this function is named 'list_homebox_labels' for backwards compatibility.
+        Homebox renamed labels to tags in v0.23.0.
+
+        :return: List of all tags
         """
         try:
             response = requests.get(
